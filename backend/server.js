@@ -1,23 +1,23 @@
+const dotenv = require('dotenv');
+dotenv.config();
+
 const express = require('express');
 const cors = require('cors');
-const dotenv = require('dotenv');
 const fs = require('fs-extra');
 const path = require('path');
 const { spawn } = require('child_process');
 const cloudinary = require('cloudinary').v2;
 const { google } = require('googleapis');
 const cron = require('node-cron');
-
 const multer = require('multer');
 
 const instagram = require('./utils/instagram');
 const quota = require('./utils/quota');
 const scheduler = require('./utils/scheduler');
+const db = require('./db');
 
-dotenv.config();
 
 const PORT = process.env.PORT || 3000;
-const TOKENS_PATH = path.resolve(__dirname, 'tokens.json');
 const DOWNLOADS_DIR = path.resolve(__dirname, 'downloads');
 
 fs.ensureDirSync(DOWNLOADS_DIR);
@@ -28,42 +28,44 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
-const oauth2Client = new google.auth.OAuth2(
+// Shared OAuth2 client — used only for auth URL generation & token exchange
+const baseOAuth2Client = new google.auth.OAuth2(
   process.env.YOUTUBE_CLIENT_ID,
   process.env.YOUTUBE_CLIENT_SECRET,
   process.env.YOUTUBE_REDIRECT_URI
 );
 
-const youtube = google.youtube({ version: 'v3', auth: oauth2Client });
-
-async function loadTokens() {
-  try {
-    return await fs.readJson(TOKENS_PATH);
-  } catch (error) {
-    return {};
+// ─── Per-user YouTube client ─────────────────────────────────────────────────
+async function getYouTubeClient(userId) {
+  const tokens = await db.loadTokens(userId);
+  if (!tokens) {
+    throw new Error('YouTube account not connected. Please connect your account in the extension.');
   }
+  const client = new google.auth.OAuth2(
+    process.env.YOUTUBE_CLIENT_ID,
+    process.env.YOUTUBE_CLIENT_SECRET,
+    process.env.YOUTUBE_REDIRECT_URI
+  );
+  client.setCredentials(tokens);
+  // Persist refreshed tokens automatically
+  client.on('tokens', async (newTokens) => {
+    const merged = { ...tokens, ...newTokens };
+    await db.saveTokens(userId, merged);
+    console.log(`[Auth] Tokens refreshed for user ${userId}`);
+  });
+  return google.youtube({ version: 'v3', auth: client });
 }
 
-async function saveTokens(tokens) {
-  const tempPath = `${TOKENS_PATH}.tmp`;
-  await fs.writeJson(tempPath, tokens, { spaces: 2 });
-  await fs.move(tempPath, TOKENS_PATH, { overwrite: true });
-}
-
+// ─── Video helpers ───────────────────────────────────────────────────────────
 function extractTitleFromUrl(videoUrl) {
   try {
     const url = new URL(videoUrl);
     if (url.hostname.includes('youtube.com')) {
       const videoId = url.searchParams.get('v');
-      if (videoId) {
-        return `YouTube Short ${videoId}`;
-      }
+      if (videoId) return `YouTube Short ${videoId}`;
       return url.pathname.split('/').filter(Boolean).pop() || 'YouTube Short';
     }
-  } catch (error) {
-    // ignore
-  }
-
+  } catch { }
   return 'YouTube Short';
 }
 
@@ -73,28 +75,13 @@ function downloadVideo(videoUrl, outputPath) {
     const ytProcess = spawn('yt-dlp', args);
     let stderr = '';
 
-    ytProcess.stderr.on('data', (chunk) => {
-      stderr += chunk.toString();
-    });
-
-    ytProcess.on('error', (error) => {
-      reject(error);
-    });
-
+    ytProcess.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
+    ytProcess.on('error', reject);
     ytProcess.on('close', async (code) => {
-      if (code !== 0) {
-        return reject(new Error(`yt-dlp exited with code ${code}: ${stderr.trim()}`));
-      }
-
-      try {
-        const exists = await fs.pathExists(outputPath);
-        if (!exists) {
-          return reject(new Error('Downloaded video file not found.'));
-        }
-        resolve(outputPath);
-      } catch (error) {
-        reject(error);
-      }
+      if (code !== 0) return reject(new Error(`yt-dlp exited with code ${code}: ${stderr.trim()}`));
+      const exists = await fs.pathExists(outputPath);
+      if (!exists) return reject(new Error('Downloaded video file not found.'));
+      resolve(outputPath);
     });
   });
 }
@@ -106,72 +93,44 @@ async function uploadToCloudinary(localPath) {
     resource_type: 'video',
     folder: 'youtube_shorts_temp',
   });
-  return {
-    secure_url: result.secure_url,
-    public_id: result.public_id,
-  };
+  return { secure_url: result.secure_url, public_id: result.public_id };
 }
 
-async function uploadToYouTube(localPath, title, description, privacy = 'unlisted', videoUrl, publishAt = null) {
-  const tokens = await loadTokens();
-  oauth2Client.setCredentials(tokens);
+async function uploadToYouTube(localPath, title, description, privacy = 'unlisted', videoUrl, publishAt = null, userId) {
+  const ytClient = await getYouTubeClient(userId);
 
   const rawTitle = title || extractTitleFromUrl(videoUrl || localPath);
-  let preparedTitle = rawTitle
-    .replace(/[\r\n]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-  
-  if (preparedTitle.length > 95) {
-    preparedTitle = preparedTitle.substring(0, 92) + '...';
-  }
-  
+  let preparedTitle = rawTitle.replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
+  if (preparedTitle.length > 95) preparedTitle = preparedTitle.substring(0, 92) + '...';
   const finalTitle = preparedTitle || 'YouTube Short';
   const preparedDescription = `${description || ''}\n\n#Shorts`.trim();
-  
-  let privacyStatus = privacy === 'public' ? 'public' : 'unlisted';
-  const statusBody = {
-    privacyStatus,
-  };
 
+  let privacyStatus = privacy === 'public' ? 'public' : 'unlisted';
+  const statusBody = { privacyStatus };
   if (publishAt) {
     statusBody.privacyStatus = 'private';
     statusBody.publishAt = new Date(publishAt).toISOString();
   }
 
-  const response = await youtube.videos.insert({
+  const response = await ytClient.videos.insert({
     part: ['snippet', 'status'],
     requestBody: {
-      snippet: {
-        title: finalTitle,
-        description: preparedDescription,
-        tags: ['Shorts'],
-      },
+      snippet: { title: finalTitle, description: preparedDescription, tags: ['Shorts'] },
       status: statusBody,
     },
-    media: {
-      body: fs.createReadStream(localPath),
-    },
+    media: { body: fs.createReadStream(localPath) },
   });
 
-  return {
-    id: response.data.id,
-    url: `https://youtu.be/${response.data.id}`,
-  };
+  return { id: response.data.id, url: `https://youtu.be/${response.data.id}` };
 }
 
 async function cleanupCloudinaryVideo(publicId) {
-  if (!publicId) {
-    return;
-  }
-
+  if (!publicId) return;
   try {
-    const result = await cloudinary.uploader.destroy(publicId, {
-      resource_type: 'video',
-    });
-    console.log(`Cloudinary cleanup result for ${publicId}:`, result);
+    await cloudinary.uploader.destroy(publicId, { resource_type: 'video' });
+    console.log(`Cloudinary cleanup: ${publicId}`);
   } catch (error) {
-    console.error(`Error cleaning Cloudinary resource ${publicId}:`, error.message || error);
+    console.error(`Error cleaning Cloudinary resource ${publicId}:`, error.message);
   }
 }
 
@@ -183,83 +142,181 @@ async function cleanupOrphanCloudinaryVideos() {
       prefix: 'youtube_shorts_temp/',
       max_results: 100,
     });
-
-    const resources = response.resources || [];
     const cutoffMs = Date.now() - 24 * 60 * 60 * 1000;
-
-    for (const resource of resources) {
-      const createdAt = new Date(resource.created_at).getTime();
-      if (createdAt && createdAt < cutoffMs) {
-        await cloudinary.uploader.destroy(resource.public_id, {
-          resource_type: 'video',
-        });
-        console.log(`Deleted orphan Cloudinary video ${resource.public_id}`);
+    for (const resource of (response.resources || [])) {
+      if (new Date(resource.created_at).getTime() < cutoffMs) {
+        await cloudinary.uploader.destroy(resource.public_id, { resource_type: 'video' });
+        console.log(`Deleted orphan Cloudinary video: ${resource.public_id}`);
       }
     }
   } catch (error) {
-    console.error('Error running orphan Cloudinary cleanup:', error.message || error);
+    console.error('Error running orphan Cloudinary cleanup:', error.message);
   }
 }
 
+// ─── Express app ─────────────────────────────────────────────────────────────
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Multer configuration for file uploads (cookies)
 const upload = multer({
   dest: instagram.COOKIES_DIR,
-  limits: { fileSize: 1 * 1024 * 1024 }, // 1MB max
+  limits: { fileSize: 1 * 1024 * 1024 },
 });
 
+// ─── Health ───────────────────────────────────────────────────────────────────
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
+// ─── Auth Endpoints ───────────────────────────────────────────────────────────
+
+/**
+ * GET /api/auth/youtube?userId=<uuid>
+ * Returns Google OAuth URL with userId embedded in state param.
+ */
 app.get('/api/auth/youtube', (req, res) => {
-  const authUrl = oauth2Client.generateAuthUrl({
+  const { userId } = req.query;
+  if (!userId) return res.status(400).json({ error: 'Missing userId' });
+
+  const authUrl = baseOAuth2Client.generateAuthUrl({
     access_type: 'offline',
-    scope: ['https://www.googleapis.com/auth/youtube.upload'],
+    scope: [
+      'https://www.googleapis.com/auth/youtube.upload',
+      'https://www.googleapis.com/auth/userinfo.email',
+    ],
     prompt: 'consent',
+    state: userId,
   });
 
   res.json({ authUrl });
 });
 
+/**
+ * GET /api/auth/callback?code=...&state=<userId>
+ * Exchanges auth code for tokens and saves them to NeonDB.
+ */
 app.get('/api/auth/callback', async (req, res, next) => {
-  const { code } = req.query;
-
-  if (!code) {
-    return res.status(400).send('<h1>Missing authorization code</h1>');
-  }
+  const { code, state: userId } = req.query;
+  if (!code) return res.status(400).send('<h1>Missing authorization code</h1>');
+  if (!userId) return res.status(400).send('<h1>Missing state (userId)</h1>');
 
   try {
-    const { tokens } = await oauth2Client.getToken(code);
-    await saveTokens(tokens);
-    res.send('<h1>YouTube authorization successful. Tokens have been saved.</h1>');
+    const { tokens } = await baseOAuth2Client.getToken(code);
+
+    let email = null;
+    try {
+      const tokenInfo = await baseOAuth2Client.getTokenInfo(tokens.access_token);
+      email = tokenInfo.email;
+    } catch { }
+
+    await db.saveTokens(userId, tokens, email);
+
+    res.send(`
+      <!DOCTYPE html>
+      <html lang="en">
+        <head>
+          <meta charset="UTF-8" />
+          <title>YouTube Connected!</title>
+          <style>
+            * { box-sizing: border-box; margin: 0; padding: 0; }
+            body {
+              font-family: system-ui, sans-serif;
+              background: #090d16;
+              color: #f8fafc;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              min-height: 100vh;
+            }
+            .card {
+              background: rgba(30,41,59,0.8);
+              border: 1px solid rgba(255,255,255,0.1);
+              border-radius: 20px;
+              padding: 48px 40px;
+              text-align: center;
+              max-width: 420px;
+              width: 90%;
+              backdrop-filter: blur(16px);
+            }
+            .icon { font-size: 3.5rem; margin-bottom: 20px; }
+            h1 { font-size: 1.6rem; font-weight: 700; color: #34d399; margin-bottom: 8px; }
+            .email { color: #38bdf8; font-size: 1rem; font-weight: 500; margin: 12px 0; }
+            p { color: #94a3b8; font-size: 0.9rem; line-height: 1.6; }
+          </style>
+        </head>
+        <body>
+          <div class="card">
+            <div class="icon">✅</div>
+            <h1>YouTube Connected!</h1>
+            ${email ? `<div class="email">${email}</div>` : ''}
+            <p>Your account has been linked successfully. You can close this tab and return to the extension.</p>
+          </div>
+        </body>
+      </html>
+    `);
   } catch (error) {
     next(error);
   }
 });
 
+/**
+ * GET /api/auth/status?userId=<uuid>
+ * Returns whether the user has connected their account.
+ */
+app.get('/api/auth/status', async (req, res) => {
+  const { userId } = req.query;
+  if (!userId) return res.status(400).json({ error: 'Missing userId' });
+
+  try {
+    const userInfo = await db.getUserInfo(userId);
+    if (!userInfo) return res.json({ connected: false });
+    res.json({ connected: true, email: userInfo.email });
+  } catch (error) {
+    console.error('Error checking auth status:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * DELETE /api/auth/logout?userId=<uuid>
+ * Removes the user's tokens from NeonDB.
+ */
+app.delete('/api/auth/logout', async (req, res) => {
+  const { userId } = req.query;
+  if (!userId) return res.status(400).json({ error: 'Missing userId' });
+
+  try {
+    await db.deleteTokens(userId);
+    res.json({ success: true, message: 'Account disconnected successfully.' });
+  } catch (error) {
+    console.error('Error logging out:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ─── Upload Endpoints ─────────────────────────────────────────────────────────
+
+/**
+ * POST /api/process
+ * Single YouTube video upload. Requires userId in body.
+ */
 app.post('/api/process', async (req, res) => {
   res.setHeader('Content-Type', 'application/x-ndjson');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
   res.flushHeaders();
 
-  const sendStep = (payload) => {
-    res.write(`${JSON.stringify(payload)}\n`);
-  };
+  const sendStep = (payload) => res.write(`${JSON.stringify(payload)}\n`);
 
   let downloadedPath = null;
   let cloudinaryPublicId = null;
 
   try {
-    const { videoUrl, title, description, privacy } = req.body || {};
+    const { videoUrl, title, description, privacy, userId } = req.body || {};
 
-    if (!videoUrl || typeof videoUrl !== 'string') {
-      throw new Error('Missing videoUrl in request body');
-    }
+    if (!userId) throw new Error('Missing userId — please connect your YouTube account.');
+    if (!videoUrl || typeof videoUrl !== 'string') throw new Error('Missing videoUrl');
 
     downloadedPath = path.join(DOWNLOADS_DIR, `download-${Date.now()}.mp4`);
     sendStep({ step: 'downloading', message: 'Starting video download...' });
@@ -272,44 +329,28 @@ app.post('/api/process', async (req, res) => {
     sendStep({ step: 'cloudinary', message: 'Cloudinary upload complete.', secureUrl: cloudinaryResult.secure_url });
 
     sendStep({ step: 'youtube', message: 'Starting YouTube upload...' });
-    const youtubeResult = await uploadToYouTube(downloadedPath, title, description, privacy, videoUrl);
+    const youtubeResult = await uploadToYouTube(downloadedPath, title, description, privacy, videoUrl, null, userId);
     sendStep({ step: 'youtube', message: 'YouTube upload complete.', videoId: youtubeResult.id, videoUrl: youtubeResult.url });
 
     sendStep({ step: 'cleanup', message: 'Cleaning temporary files...' });
     await cleanupCloudinaryVideo(cloudinaryPublicId);
     cloudinaryPublicId = null;
-
-    if (downloadedPath) {
-      await fs.remove(downloadedPath);
-      downloadedPath = null;
-    }
+    if (downloadedPath) { await fs.remove(downloadedPath); downloadedPath = null; }
 
     sendStep({ step: 'complete', message: 'Process completed successfully.', videoId: youtubeResult.id, videoUrl: youtubeResult.url });
   } catch (error) {
     console.error('Process error:', error);
     sendStep({ step: 'error', message: error.message || 'Unknown error' });
   } finally {
-    if (cloudinaryPublicId) {
-      await cleanupCloudinaryVideo(cloudinaryPublicId);
-    }
-
-    if (downloadedPath) {
-      try {
-        await fs.remove(downloadedPath);
-      } catch (cleanupError) {
-        console.error('Error removing downloaded file:', cleanupError.message || cleanupError);
-      }
-    }
-
+    if (cloudinaryPublicId) await cleanupCloudinaryVideo(cloudinaryPublicId);
+    if (downloadedPath) await fs.remove(downloadedPath).catch(() => {});
     res.end();
   }
 });
 
-// ============ Instagram Reels Endpoints ============
-
 /**
  * POST /api/process-batch
- * Batch process Instagram Reels with sequential processing
+ * Batch upload Instagram Reels. Requires userId in body.
  */
 app.post('/api/process-batch', async (req, res) => {
   res.setHeader('Content-Type', 'application/x-ndjson');
@@ -317,35 +358,23 @@ app.post('/api/process-batch', async (req, res) => {
   res.setHeader('Connection', 'keep-alive');
   res.flushHeaders();
 
-  const sendStep = (payload) => {
-    res.write(`${JSON.stringify(payload)}\n`);
-  };
+  const sendStep = (payload) => res.write(`${JSON.stringify(payload)}\n`);
 
   try {
-    const { urls = [], defaultCredit = true, globalTitle = '', globalDescription = '' } = req.body || {};
+    const { urls = [], defaultCredit = true, globalTitle = '', globalDescription = '', userId } = req.body || {};
 
-    if (!Array.isArray(urls) || urls.length === 0) {
-      throw new Error('Missing or empty urls array');
-    }
+    if (!userId) throw new Error('Missing userId — please connect your YouTube account.');
+    if (!Array.isArray(urls) || urls.length === 0) throw new Error('Missing or empty urls array');
+    if (urls.length > 10) throw new Error('Maximum 10 reels per batch submission');
 
-    if (urls.length > 10) {
-      throw new Error('Maximum 10 reels per batch submission');
-    }
-
-    // Check quota before processing
     const allowed = await quota.isUploadAllowed(urls.length);
     if (!allowed) {
       const remaining = await quota.getRemainingUploads();
       throw new Error(`Daily quota exceeded. Remaining uploads: ${remaining}`);
     }
 
-    sendStep({
-      step: 'init',
-      message: `Starting batch processing of ${urls.length} reel(s)`,
-      total: urls.length,
-    });
+    sendStep({ step: 'init', message: `Starting batch processing of ${urls.length} reel(s)`, total: urls.length });
 
-    // Process sequentially
     let successCount = 0;
     let failureCount = 0;
 
@@ -354,17 +383,10 @@ app.post('/api/process-batch', async (req, res) => {
       const reelIndex = index + 1;
 
       try {
-        sendStep({
-          step: 'batch-processing',
-          message: `Processing reel ${reelIndex}/${urls.length}: ${url}`,
-          reel: reelIndex,
-          total: urls.length,
-          status: 'starting',
-        });
+        sendStep({ step: 'batch-processing', message: `Processing reel ${reelIndex}/${urls.length}: ${url}`, reel: reelIndex, total: urls.length, status: 'starting' });
 
-        // Add random delay (2-5 seconds) between downloads to avoid rate limiting
         if (index > 0) {
-          const delay = Math.random() * 3000 + 2000; // 2-5 seconds
+          const delay = Math.random() * 3000 + 2000;
           await new Promise((resolve) => setTimeout(resolve, delay));
         }
 
@@ -374,48 +396,25 @@ app.post('/api/process-batch', async (req, res) => {
           globalDescription,
           defaultCredit,
           (message) => {
-            sendStep({
-              step: 'batch-processing',
-              message: `Reel ${reelIndex}: ${message}`,
-              reel: reelIndex,
-              total: urls.length,
-              status: 'processing',
-            });
-          }
+            sendStep({ step: 'batch-processing', message: `Reel ${reelIndex}: ${message}`, reel: reelIndex, total: urls.length, status: 'processing' });
+          },
+          null,
+          userId
         );
 
         successCount++;
-        sendStep({
-          step: 'batch-processing',
-          message: `Reel ${reelIndex} uploaded successfully`,
-          reel: reelIndex,
-          total: urls.length,
-          status: 'success',
-        });
+        sendStep({ step: 'batch-processing', message: `Reel ${reelIndex} uploaded successfully`, reel: reelIndex, total: urls.length, status: 'success' });
       } catch (error) {
         failureCount++;
-        console.error(`Reel ${reelIndex} processing failed:`, error.message);
-        sendStep({
-          step: 'batch-processing',
-          message: `Reel ${reelIndex} failed: ${error.message}`,
-          reel: reelIndex,
-          total: urls.length,
-          status: 'error',
-        });
+        console.error(`Reel ${reelIndex} failed:`, error.message);
+        sendStep({ step: 'batch-processing', message: `Reel ${reelIndex} failed: ${error.message}`, reel: reelIndex, total: urls.length, status: 'error' });
       }
     }
 
-    // Increment quota
     await quota.incrementUploadCount(successCount);
     const quotaInfo = await quota.getQuotaInfo();
 
-    sendStep({
-      step: 'complete',
-      message: `Batch processing complete. Success: ${successCount}, Failures: ${failureCount}`,
-      success: successCount,
-      failures: failureCount,
-      quota: quotaInfo,
-    });
+    sendStep({ step: 'complete', message: `Batch complete. Success: ${successCount}, Failures: ${failureCount}`, success: successCount, failures: failureCount, quota: quotaInfo });
   } catch (error) {
     console.error('Batch process error:', error);
     sendStep({ step: 'error', message: error.message || 'Unknown error' });
@@ -424,88 +423,51 @@ app.post('/api/process-batch', async (req, res) => {
   res.end();
 });
 
-/**
- * GET /api/instagram/cookies/status
- * Check if Instagram cookies are available
- */
+// ─── Instagram Cookie Endpoints ───────────────────────────────────────────────
+
 app.get('/api/instagram/cookies/status', async (req, res) => {
   try {
     const hasCookies = await instagram.hasCookies();
-    res.json({
-      hasCookies,
-      message: hasCookies ? 'Cookies available' : 'No cookies found. Please upload cookies.txt to enable Instagram Reels support.',
-    });
+    res.json({ hasCookies, message: hasCookies ? 'Cookies available' : 'No cookies found.' });
   } catch (error) {
-    console.error('Error checking cookies:', error);
     res.status(500).json({ error: error.message });
   }
 });
 
-/**
- * POST /api/instagram/cookies
- * Upload Instagram cookies file
- */
 app.post('/api/instagram/cookies', upload.single('cookies'), async (req, res) => {
   try {
-    if (!req.file) {
-      return res.status(400).json({ error: 'No file uploaded' });
-    }
-
-    // Read the uploaded file and save it
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
     const fileContent = await fs.readFile(req.file.path);
     await instagram.saveCookies(fileContent);
-
-    // Delete temporary uploaded file
     await fs.remove(req.file.path);
-
-    res.json({
-      success: true,
-      message: 'Instagram cookies uploaded and saved successfully',
-    });
+    res.json({ success: true, message: 'Instagram cookies uploaded and saved successfully' });
   } catch (error) {
-    console.error('Error uploading cookies:', error);
-    if (req.file) {
-      await fs.remove(req.file.path).catch(() => {});
-    }
+    if (req.file) await fs.remove(req.file.path).catch(() => {});
     res.status(500).json({ error: error.message });
   }
 });
 
-/**
- * DELETE /api/instagram/cookies
- * Delete Instagram cookies
- */
 app.delete('/api/instagram/cookies', async (req, res) => {
   try {
     await instagram.deleteCookies();
-    res.json({
-      success: true,
-      message: 'Instagram cookies deleted',
-    });
+    res.json({ success: true, message: 'Instagram cookies deleted' });
   } catch (error) {
-    console.error('Error deleting cookies:', error);
     res.status(500).json({ error: error.message });
   }
 });
 
-/**
- * GET /api/quota
- * Get current daily upload quota status
- */
+// ─── Quota ────────────────────────────────────────────────────────────────────
 app.get('/api/quota', async (req, res) => {
   try {
     const quotaInfo = await quota.getQuotaInfo();
     res.json(quotaInfo);
   } catch (error) {
-    console.error('Error getting quota:', error);
     res.status(500).json({ error: error.message });
   }
 });
 
-/**
- * Process a single Instagram Reel
- */
-async function processInstagramReel(reelUrl, globalTitle, globalDescription, creditUser, progressCallback, publishAt = null) {
+// ─── processInstagramReel ─────────────────────────────────────────────────────
+async function processInstagramReel(reelUrl, globalTitle, globalDescription, creditUser, progressCallback, publishAt = null, userId) {
   let downloadedPath = null;
   let cloudinaryPublicId = null;
 
@@ -522,77 +484,55 @@ async function processInstagramReel(reelUrl, globalTitle, globalDescription, cre
     cloudinaryPublicId = cloudinaryResult.public_id;
 
     progressCallback('Uploading to YouTube...');
-    // Build title — ensure it is never empty (YouTube rejects empty titles)
     const rawCaption = (metadata.caption || '').replace(/[\r\n]+/g, ' ').trim();
     const title = (globalTitle && globalTitle.trim()) ||
                   (rawCaption && rawCaption.substring(0, 80)) ||
                   'Instagram Reel';
 
-    // Build description with credit
     let description = globalDescription || metadata.caption || '';
     if (creditUser) {
       const formatDate = metadata.uploadDate ? formatInstagramDate(metadata.uploadDate) : '';
-      const creditLine = `\n\n🔄 Originally posted on Instagram by @${metadata.uploader}`;
-      const dateInfo = formatDate ? `\n📅 Date: ${formatDate}` : '';
-      description += creditLine + dateInfo + '\n#Shorts #InstagramReels';
+      description += `\n\n🔄 Originally posted on Instagram by @${metadata.uploader}`;
+      if (formatDate) description += `\n📅 Date: ${formatDate}`;
+      description += '\n#Shorts #InstagramReels';
     } else {
       description += '\n\n#Shorts';
     }
 
     const privacy = publishAt ? 'private' : 'unlisted';
-    const youtubeResult = await uploadToYouTube(downloadedPath, title, description, privacy, reelUrl, publishAt);
+    const youtubeResult = await uploadToYouTube(downloadedPath, title, description, privacy, reelUrl, publishAt, userId);
 
     progressCallback('Cleaning up...');
     await cleanupCloudinaryVideo(cloudinaryPublicId);
     cloudinaryPublicId = null;
-
-    if (downloadedPath) {
-      await fs.remove(downloadedPath);
-      downloadedPath = null;
-    }
+    if (downloadedPath) { await fs.remove(downloadedPath); downloadedPath = null; }
 
     progressCallback(`Uploaded: ${youtubeResult.url}`);
     return youtubeResult;
   } catch (error) {
     throw error;
   } finally {
-    if (cloudinaryPublicId) {
-      await cleanupCloudinaryVideo(cloudinaryPublicId).catch(() => {});
-    }
-
-    if (downloadedPath) {
-      await fs.remove(downloadedPath).catch(() => {});
-    }
+    if (cloudinaryPublicId) await cleanupCloudinaryVideo(cloudinaryPublicId).catch(() => {});
+    if (downloadedPath) await fs.remove(downloadedPath).catch(() => {});
   }
 }
 
-/**
- * Format Instagram upload date from YYYYMMDD format
- */
 function formatInstagramDate(uploadDate) {
-  if (!uploadDate || uploadDate.length !== 8) {
-    return '';
-  }
-  const year = uploadDate.substring(0, 4);
-  const month = uploadDate.substring(4, 6);
-  const day = uploadDate.substring(6, 8);
-  return `${day}/${month}/${year}`;
+  if (!uploadDate || uploadDate.length !== 8) return '';
+  return `${uploadDate.substring(6, 8)}/${uploadDate.substring(4, 6)}/${uploadDate.substring(0, 4)}`;
 }
 
-// ============ Scheduling Helper & Cron ============
-
+// ─── Scheduling Helper & Cron ─────────────────────────────────────────────────
 async function executeScheduledJob(job) {
   let downloadedPath = null;
   let cloudinaryPublicId = null;
-  
+
   try {
     const allowed = await quota.isUploadAllowed(1);
-    if (!allowed) {
-      throw new Error('Daily upload quota exceeded. Scheduled job failed.');
-    }
+    if (!allowed) throw new Error('Daily upload quota exceeded. Scheduled job failed.');
 
     await scheduler.updateJob(job.id, { status: 'processing' });
-    console.log(`[Scheduler] Processing job ${job.id}: ${job.videoUrl}`);
+    console.log(`[Scheduler] Processing job ${job.id} for user ${job.userId}`);
 
     let youtubeResult;
 
@@ -603,11 +543,12 @@ async function executeScheduledJob(job) {
         job.description,
         true,
         (msg) => console.log(`[Job ${job.id}]: ${msg}`),
-        job.scheduledAt
+        job.scheduledAt,
+        job.userId
       );
     } else {
-      downloadedPath = path.join(DOWNLOADS_DIR, `scheduled-download-${Date.now()}.mp4`);
-      console.log(`[Job ${job.id}] Downloading video...`);
+      downloadedPath = path.join(DOWNLOADS_DIR, `scheduled-${Date.now()}.mp4`);
+      console.log(`[Job ${job.id}] Downloading...`);
       await downloadVideo(job.videoUrl, downloadedPath);
 
       console.log(`[Job ${job.id}] Uploading to Cloudinary...`);
@@ -616,46 +557,24 @@ async function executeScheduledJob(job) {
 
       console.log(`[Job ${job.id}] Uploading to YouTube...`);
       youtubeResult = await uploadToYouTube(
-        downloadedPath,
-        job.title,
-        job.description,
-        job.privacy,
-        job.videoUrl,
-        job.scheduledAt
+        downloadedPath, job.title, job.description, job.privacy,
+        job.videoUrl, job.scheduledAt, job.userId
       );
 
-      console.log(`[Job ${job.id}] Cleaning up...`);
       await cleanupCloudinaryVideo(cloudinaryPublicId);
       cloudinaryPublicId = null;
-
-      if (downloadedPath) {
-        await fs.remove(downloadedPath);
-        downloadedPath = null;
-      }
+      if (downloadedPath) { await fs.remove(downloadedPath); downloadedPath = null; }
     }
 
     await quota.incrementUploadCount(1);
-
-    await scheduler.updateJob(job.id, {
-      status: 'done',
-      videoId: youtubeResult.id,
-      videoUrlResult: youtubeResult.url,
-    });
-    console.log(`[Scheduler] Job ${job.id} completed successfully: ${youtubeResult.url}`);
-
+    await scheduler.updateJob(job.id, { status: 'done', videoId: youtubeResult.id, videoUrlResult: youtubeResult.url });
+    console.log(`[Scheduler] Job ${job.id} complete: ${youtubeResult.url}`);
   } catch (error) {
     console.error(`[Scheduler] Job ${job.id} failed:`, error);
-    await scheduler.updateJob(job.id, {
-      status: 'error',
-      error: error.message || 'Unknown error during execution',
-    });
+    await scheduler.updateJob(job.id, { status: 'error', error: error.message || 'Unknown error' });
   } finally {
-    if (cloudinaryPublicId) {
-      await cleanupCloudinaryVideo(cloudinaryPublicId).catch(() => {});
-    }
-    if (downloadedPath) {
-      await fs.remove(downloadedPath).catch(() => {});
-    }
+    if (cloudinaryPublicId) await cleanupCloudinaryVideo(cloudinaryPublicId).catch(() => {});
+    if (downloadedPath) await fs.remove(downloadedPath).catch(() => {});
   }
 }
 
@@ -664,45 +583,34 @@ cron.schedule('* * * * *', async () => {
     const dueJobs = await scheduler.getDueJobs();
     if (dueJobs.length > 0) {
       console.log(`[Scheduler] Found ${dueJobs.length} due job(s)`);
-      for (const job of dueJobs) {
-        await executeScheduledJob(job);
-      }
+      for (const job of dueJobs) await executeScheduledJob(job);
     }
   } catch (error) {
     console.error('[Scheduler] Error running due jobs check:', error);
   }
 });
 
-// ============ Scheduling Endpoints ============
+// ─── Schedule Endpoints ───────────────────────────────────────────────────────
 
+/**
+ * POST /api/schedule
+ * Schedule a video upload. Requires userId in body.
+ */
 app.post('/api/schedule', async (req, res) => {
   try {
-    const { videoUrl, title, description, privacy, platform, scheduledAt } = req.body || {};
+    const { videoUrl, title, description, privacy, platform, scheduledAt, userId } = req.body || {};
 
-    if (!videoUrl || typeof videoUrl !== 'string') {
-      return res.status(400).json({ error: 'Missing videoUrl' });
-    }
+    if (!userId) return res.status(400).json({ error: 'Missing userId' });
+    if (!videoUrl) return res.status(400).json({ error: 'Missing videoUrl' });
+    if (!scheduledAt) return res.status(400).json({ error: 'Missing scheduledAt' });
 
-    if (!scheduledAt) {
-      return res.status(400).json({ error: 'Missing scheduledAt' });
-    }
-
-    const parsedScheduledDate = new Date(scheduledAt);
-    if (isNaN(parsedScheduledDate.getTime())) {
-      return res.status(400).json({ error: 'Invalid scheduledAt format' });
-    }
-
-    if (parsedScheduledDate <= new Date()) {
-      return res.status(400).json({ error: 'scheduledAt must be in the future' });
-    }
+    const parsedDate = new Date(scheduledAt);
+    if (isNaN(parsedDate.getTime())) return res.status(400).json({ error: 'Invalid scheduledAt format' });
+    if (parsedDate <= new Date()) return res.status(400).json({ error: 'scheduledAt must be in the future' });
 
     const job = await scheduler.addJob({
-      videoUrl,
-      title,
-      description,
-      privacy,
-      platform,
-      scheduledAt: parsedScheduledDate.toISOString(),
+      userId, videoUrl, title, description, privacy, platform,
+      scheduledAt: parsedDate.toISOString(),
     });
 
     res.json(job);
@@ -712,9 +620,15 @@ app.post('/api/schedule', async (req, res) => {
   }
 });
 
+/**
+ * GET /api/schedule?userId=<uuid>
+ * List all jobs for the given user.
+ */
 app.get('/api/schedule', async (req, res) => {
   try {
-    const jobs = await scheduler.getJobs();
+    const { userId } = req.query;
+    if (!userId) return res.status(400).json({ error: 'Missing userId' });
+    const jobs = await scheduler.getJobs(userId);
     res.json(jobs);
   } catch (error) {
     console.error('Error listing scheduled jobs:', error);
@@ -722,14 +636,17 @@ app.get('/api/schedule', async (req, res) => {
   }
 });
 
+/**
+ * DELETE /api/schedule/:id
+ * Cancel a pending job.
+ */
 app.delete('/api/schedule/:id', async (req, res) => {
   try {
-    const { id } = req.params;
-    const removed = await scheduler.removeJob(id);
+    const removed = await scheduler.removeJob(req.params.id);
     if (removed) {
-      res.json({ success: true, message: 'Job canceled and removed successfully.' });
+      res.json({ success: true, message: 'Job cancelled successfully.' });
     } else {
-      res.status(404).json({ error: 'Job not found' });
+      res.status(404).json({ error: 'Job not found or already running/completed.' });
     }
   } catch (error) {
     console.error('Error deleting job:', error);
@@ -737,20 +654,28 @@ app.delete('/api/schedule/:id', async (req, res) => {
   }
 });
 
+// ─── Error handler ────────────────────────────────────────────────────────────
 app.use((err, req, res, next) => {
   console.error('Unhandled error:', err);
   res.status(500).json({ error: err.message || 'Internal server error' });
 });
 
+// ─── Periodic cleanup ─────────────────────────────────────────────────────────
 cron.schedule('0 */6 * * *', async () => {
-  console.log('Running scheduled orphan cleanup...');
+  console.log('Running orphan Cloudinary cleanup...');
   await cleanupOrphanCloudinaryVideos();
 });
 
-cleanupOrphanCloudinaryVideos().catch((error) => {
-  console.error('Initial Cloudinary cleanup error:', error.message || error);
+cleanupOrphanCloudinaryVideos().catch((err) => {
+  console.error('Initial Cloudinary cleanup error:', err.message);
 });
 
-app.listen(PORT, () => {
-  console.log(`Backend listening on port ${PORT}`);
-});
+// ─── Start ────────────────────────────────────────────────────────────────────
+db.initDb()
+  .then(() => {
+    app.listen(PORT, () => console.log(`Backend listening on port ${PORT}`));
+  })
+  .catch((err) => {
+    console.error('[FATAL] DB init failed:', err);
+    process.exit(1);
+  });
