@@ -7,8 +7,7 @@ const { spawn } = require('child_process');
 const cloudinary = require('cloudinary').v2;
 const { google } = require('googleapis');
 const cron = require('node-cron');
-const pLimitModule = require('p-limit');
-const pLimit = typeof pLimitModule === 'function' ? pLimitModule : pLimitModule.default;
+
 const multer = require('multer');
 
 const instagram = require('./utils/instagram');
@@ -346,8 +345,7 @@ app.post('/api/process-batch', async (req, res) => {
       total: urls.length,
     });
 
-    // Process sequentially with concurrency limit of 1
-    const limit = pLimit(1);
+    // Process sequentially
     let successCount = 0;
     let failureCount = 0;
 
@@ -370,23 +368,21 @@ app.post('/api/process-batch', async (req, res) => {
           await new Promise((resolve) => setTimeout(resolve, delay));
         }
 
-        await limit(async () => {
-          await processInstagramReel(
-            url,
-            globalTitle,
-            globalDescription,
-            defaultCredit,
-            (message) => {
-              sendStep({
-                step: 'batch-processing',
-                message: `Reel ${reelIndex}: ${message}`,
-                reel: reelIndex,
-                total: urls.length,
-                status: 'processing',
-              });
-            }
-          );
-        });
+        await processInstagramReel(
+          url,
+          globalTitle,
+          globalDescription,
+          defaultCredit,
+          (message) => {
+            sendStep({
+              step: 'batch-processing',
+              message: `Reel ${reelIndex}: ${message}`,
+              reel: reelIndex,
+              total: urls.length,
+              status: 'processing',
+            });
+          }
+        );
 
         successCount++;
         sendStep({
