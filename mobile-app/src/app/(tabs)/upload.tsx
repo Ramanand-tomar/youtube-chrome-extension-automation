@@ -4,11 +4,13 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Spacing } from '@/constants/theme';
+import AuthGateBanner from '../../components/AuthGateBanner';
 
 export default function UploadScreen() {
   return (
     <ThemedView style={styles.container}>
       <SafeAreaView style={styles.safeArea}>
+        <AuthGateBanner />
         <ThemedText type="title">Upload Now</ThemedText>
         <ThemedText type="default">Upload Shorts & Reels directly to YouTube.</ThemedText>
       </SafeAreaView>
@@ -26,3 +28,4 @@ const styles = StyleSheet.create({
     gap: Spacing.three,
   },
 });
+
