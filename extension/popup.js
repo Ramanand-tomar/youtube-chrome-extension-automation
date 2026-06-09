@@ -1,4 +1,4 @@
-const BACKEND_URL = 'http://localhost:3000';
+const BACKEND_URL = 'https://youtube-chrome-extension-automation.onrender.com';
 // const BACKEND_URL = 'https://your-backend.onrender.com';
 
 const videoPreview = document.getElementById('videoPreview');
