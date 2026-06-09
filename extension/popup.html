@@ -1,0 +1,609 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>YouTube Shorts Uploader</title>
+    <!-- Modern typography -->
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+    <style>
+      :root {
+        --bg-gradient: linear-gradient(135deg, #0f172a 0%, #020617 100%);
+        --card-bg: rgba(30, 41, 59, 0.45);
+        --card-border: rgba(255, 255, 255, 0.08);
+        --accent-gradient: linear-gradient(135deg, #38bdf8 0%, #6366f1 100%);
+        --text-primary: #f8fafc;
+        --text-secondary: #94a3b8;
+        --input-bg: rgba(15, 23, 42, 0.6);
+        --input-border: rgba(255, 255, 255, 0.1);
+        --input-focus: #38bdf8;
+        --success: #34d399;
+        --error: #f87171;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        font-family: 'Outfit', system-ui, sans-serif;
+        background: #090d16;
+        background-image: 
+          radial-gradient(at 0% 0%, rgba(99, 102, 241, 0.15) 0px, transparent 50%),
+          radial-gradient(at 100% 100%, rgba(56, 189, 248, 0.15) 0px, transparent 50%);
+        color: var(--text-primary);
+        margin: 0;
+        padding: 16px;
+        width: 380px;
+        min-height: 480px;
+        overflow-x: hidden;
+      }
+
+      .card {
+        background: var(--card-bg);
+        border: 1px solid var(--card-border);
+        border-radius: 20px;
+        padding: 20px;
+        box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
+        backdrop-filter: blur(16px);
+        -webkit-backdrop-filter: blur(16px);
+      }
+
+      /* Header styling */
+      .header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 20px;
+      }
+
+      .logo-container {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .logo-icon {
+        background: var(--accent-gradient);
+        width: 32px;
+        height: 32px;
+        border-radius: 8px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: bold;
+        color: #0f172a;
+        font-size: 1.1rem;
+        box-shadow: 0 4px 12px rgba(56, 189, 248, 0.3);
+      }
+
+      h1 {
+        font-size: 1.2rem;
+        font-weight: 600;
+        margin: 0;
+        background: var(--accent-gradient);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+      }
+
+      .platform-badge {
+        font-size: 0.75rem;
+        font-weight: 500;
+        padding: 4px 10px;
+        border-radius: 99px;
+        background: rgba(255, 255, 255, 0.06);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        display: inline-block;
+      }
+      .platform-badge.youtube {
+        color: #ff4545;
+        background: rgba(255, 69, 69, 0.1);
+        border-color: rgba(255, 69, 69, 0.2);
+      }
+      .platform-badge.instagram {
+        color: #f43f5e;
+        background: rgba(244, 63, 94, 0.1);
+        border-color: rgba(244, 63, 94, 0.2);
+      }
+
+      /* Tabs styling */
+      .tabs {
+        display: flex;
+        background: rgba(255, 255, 255, 0.04);
+        padding: 4px;
+        border-radius: 12px;
+        margin-bottom: 20px;
+        border: 1px solid rgba(255, 255, 255, 0.05);
+      }
+
+      .tab-btn {
+        flex: 1;
+        background: transparent;
+        border: none;
+        color: var(--text-secondary);
+        padding: 8px 12px;
+        font-size: 0.9rem;
+        font-weight: 500;
+        border-radius: 8px;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        font-family: inherit;
+      }
+
+      .tab-btn.active {
+        background: rgba(255, 255, 255, 0.08);
+        color: var(--text-primary);
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+      }
+
+      .tab-panel {
+        display: none;
+        animation: fadeIn 0.3s ease;
+      }
+
+      .tab-panel.active {
+        display: block;
+      }
+
+      @keyframes fadeIn {
+        from { opacity: 0; transform: translateY(6px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
+
+      /* Form elements styling */
+      .video-preview {
+        background: rgba(255, 255, 255, 0.03);
+        border: 1px dashed rgba(255, 255, 255, 0.15);
+        padding: 12px;
+        border-radius: 12px;
+        font-size: 0.85rem;
+        color: #cbd5e1;
+        margin-bottom: 16px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .form-group {
+        margin-bottom: 16px;
+        position: relative;
+      }
+
+      label {
+        display: block;
+        margin-bottom: 6px;
+        font-size: 0.85rem;
+        font-weight: 500;
+        color: var(--text-secondary);
+      }
+
+      input,
+      textarea,
+      select {
+        width: 100%;
+        border: 1px solid var(--input-border);
+        border-radius: 10px;
+        background: var(--input-bg);
+        color: var(--text-primary);
+        padding: 10px 14px;
+        font-size: 0.9rem;
+        font-family: inherit;
+        transition: all 0.2s ease;
+        outline: none;
+      }
+
+      input:focus,
+      textarea:focus,
+      select:focus {
+        border-color: var(--input-focus);
+        box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.15);
+        background: rgba(15, 23, 42, 0.8);
+      }
+
+      textarea {
+        min-height: 80px;
+        resize: vertical;
+      }
+
+      /* Custom toggle styling */
+      .toggle-container {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 16px;
+        cursor: pointer;
+        user-select: none;
+      }
+
+      .toggle-container input[type="checkbox"] {
+        width: auto;
+        margin: 0;
+        cursor: pointer;
+      }
+
+      .toggle-label {
+        font-size: 0.9rem;
+        color: var(--text-primary);
+        font-weight: 500;
+      }
+
+      #scheduleTimeContainer {
+        display: none;
+        animation: slideDown 0.2s ease;
+        margin-bottom: 16px;
+        background: rgba(255, 255, 255, 0.02);
+        padding: 12px;
+        border-radius: 10px;
+        border: 1px solid rgba(255, 255, 255, 0.05);
+      }
+
+      @keyframes slideDown {
+        from { opacity: 0; transform: translateY(-10px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
+
+      /* Primary Button */
+      button.primary-btn {
+        width: 100%;
+        border: none;
+        background: var(--accent-gradient);
+        color: #090d16;
+        font-weight: 600;
+        font-size: 0.95rem;
+        padding: 12px 16px;
+        border-radius: 12px;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        box-shadow: 0 4px 14px rgba(99, 102, 241, 0.3);
+        font-family: inherit;
+      }
+
+      button.primary-btn:hover:not(:disabled) {
+        transform: translateY(-1px);
+        box-shadow: 0 6px 20px rgba(99, 102, 241, 0.4);
+        filter: brightness(1.1);
+      }
+
+      button.primary-btn:disabled {
+        background: #1e293b;
+        color: #64748b;
+        cursor: not-allowed;
+        box-shadow: none;
+        transform: none;
+      }
+
+      /* Progress Bar */
+      .progress {
+        width: 100%;
+        height: 8px;
+        background: rgba(255, 255, 255, 0.05);
+        border-radius: 999px;
+        overflow: hidden;
+        margin-top: 16px;
+        display: none;
+        border: 1px solid rgba(255, 255, 255, 0.03);
+      }
+
+      .progress-bar {
+        height: 100%;
+        width: 0%;
+        background: var(--accent-gradient);
+        border-radius: 999px;
+        transition: width 0.3s ease;
+      }
+
+      /* Log console */
+      #processLog {
+        display: none;
+        margin-top: 14px;
+        background: rgba(0, 0, 0, 0.4);
+        border: 1px solid rgba(255, 255, 255, 0.05);
+        border-radius: 10px;
+        padding: 10px;
+        max-height: 110px;
+        overflow-y: auto;
+        font-size: 0.75rem;
+        color: #cbd5e1;
+        line-height: 1.5;
+        font-family: 'Consolas', monospace;
+      }
+
+      .log-line {
+        border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+        padding: 3px 0;
+      }
+
+      .log-line:last-child {
+        border-bottom: none;
+      }
+
+      /* Status area */
+      .status {
+        margin-top: 14px;
+        font-size: 0.85rem;
+        padding: 10px 12px;
+        border-radius: 8px;
+        display: none;
+        align-items: center;
+        gap: 8px;
+        animation: fadeIn 0.2s ease;
+      }
+
+      .status.error {
+        display: flex;
+        background: rgba(248, 113, 113, 0.1);
+        border: 1px solid rgba(248, 113, 113, 0.2);
+        color: var(--error);
+      }
+
+      .status.success {
+        display: flex;
+        background: rgba(52, 211, 153, 0.1);
+        border: 1px solid rgba(52, 211, 153, 0.2);
+        color: var(--success);
+      }
+
+      .status.info {
+        display: flex;
+        background: rgba(56, 189, 248, 0.1);
+        border: 1px solid rgba(56, 189, 248, 0.2);
+        color: #38bdf8;
+      }
+
+      a.upload-link {
+        color: #38bdf8;
+        text-decoration: underline;
+        font-weight: 500;
+      }
+
+      /* Scheduled jobs tab */
+      .scheduled-list {
+        max-height: 320px;
+        overflow-y: auto;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        padding-right: 2px;
+      }
+
+      .job-card {
+        background: rgba(255, 255, 255, 0.02);
+        border: 1px solid rgba(255, 255, 255, 0.06);
+        border-radius: 12px;
+        padding: 12px;
+        transition: all 0.2s ease;
+        position: relative;
+      }
+
+      .job-card:hover {
+        background: rgba(255, 255, 255, 0.04);
+        border-color: rgba(255, 255, 255, 0.1);
+      }
+
+      .job-meta {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 6px;
+      }
+
+      .job-platform {
+        font-size: 0.7rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        padding: 2px 6px;
+        border-radius: 4px;
+      }
+      .job-platform.youtube {
+        background: rgba(255, 69, 69, 0.1);
+        color: #ff4545;
+      }
+      .job-platform.instagram {
+        background: rgba(244, 63, 94, 0.1);
+        color: #f43f5e;
+      }
+
+      .job-status-badge {
+        font-size: 0.7rem;
+        font-weight: 500;
+        border-radius: 4px;
+        padding: 2px 6px;
+      }
+      .job-status-badge.pending {
+        background: rgba(234, 179, 8, 0.1);
+        color: #eab308;
+      }
+      .job-status-badge.processing {
+        background: rgba(56, 189, 248, 0.1);
+        color: #38bdf8;
+        animation: pulse 1.5s infinite;
+      }
+      .job-status-badge.done {
+        background: rgba(52, 211, 153, 0.1);
+        color: var(--success);
+      }
+      .job-status-badge.error {
+        background: rgba(248, 113, 113, 0.1);
+        color: var(--error);
+      }
+
+      @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.6; }
+      }
+
+      .job-details {
+        margin-bottom: 8px;
+      }
+
+      .job-title-text {
+        font-size: 0.85rem;
+        font-weight: 500;
+        color: var(--text-primary);
+        margin: 0 0 4px;
+        display: -webkit-box;
+        -webkit-line-clamp: 1;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+      }
+
+      .job-time-text {
+        font-size: 0.75rem;
+        color: var(--text-secondary);
+        display: flex;
+        align-items: center;
+        gap: 4px;
+      }
+
+      .job-error-msg {
+        font-size: 0.7rem;
+        color: var(--error);
+        margin-top: 4px;
+        background: rgba(248, 113, 113, 0.05);
+        padding: 4px;
+        border-radius: 4px;
+        border-left: 2px solid var(--error);
+        overflow-wrap: break-word;
+      }
+
+      .cancel-job-btn {
+        background: rgba(248, 113, 113, 0.08);
+        border: 1px solid rgba(248, 113, 113, 0.15);
+        color: var(--error);
+        font-size: 0.75rem;
+        font-weight: 500;
+        padding: 4px 10px;
+        border-radius: 6px;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        display: inline-block;
+        font-family: inherit;
+      }
+
+      .cancel-job-btn:hover {
+        background: rgba(248, 113, 113, 0.2);
+        border-color: rgba(248, 113, 113, 0.3);
+      }
+
+      /* Empty State */
+      .empty-state {
+        text-align: center;
+        padding: 30px 20px;
+        color: var(--text-secondary);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 12px;
+      }
+
+      .empty-state-icon {
+        width: 48px;
+        height: 48px;
+        stroke: var(--text-secondary);
+        stroke-width: 1.5;
+        fill: none;
+        opacity: 0.6;
+      }
+
+      .empty-state-text {
+        font-size: 0.85rem;
+      }
+
+      /* custom scrollbar for list & logs */
+      ::-webkit-scrollbar {
+        width: 6px;
+      }
+      ::-webkit-scrollbar-track {
+        background: transparent;
+      }
+      ::-webkit-scrollbar-thumb {
+        background: rgba(255, 255, 255, 0.1);
+        border-radius: 99px;
+      }
+      ::-webkit-scrollbar-thumb:hover {
+        background: rgba(255, 255, 255, 0.2);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <div class="header">
+        <div class="logo-container">
+          <div class="logo-icon">🎦</div>
+          <h1>ShortsFlow</h1>
+        </div>
+        <div class="platform-badge" id="platformBadge">Detecting...</div>
+      </div>
+
+      <!-- Navigation tabs -->
+      <div class="tabs">
+        <button class="tab-btn active" id="tabUploadNow">Upload Now</button>
+        <button class="tab-btn" id="tabScheduled">Scheduled</button>
+      </div>
+
+      <!-- Tab 1: Upload Now Panel -->
+      <div id="panelUploadNow" class="tab-panel active">
+        <div class="video-preview" id="videoPreview">Loading current video...</div>
+
+        <div class="form-group">
+          <label for="title">Title</label>
+          <input id="title" placeholder="Optional: override video title" />
+        </div>
+
+        <div class="form-group">
+          <label for="description">Description</label>
+          <textarea id="description" placeholder="Optional: add description for the upload"></textarea>
+        </div>
+
+        <div class="form-group" id="privacyGroup">
+          <label for="privacy">Privacy</label>
+          <select id="privacy">
+            <option value="unlisted">Unlisted</option>
+            <option value="public">Public</option>
+          </select>
+        </div>
+
+        <!-- Schedule toggle checkbox -->
+        <div class="toggle-container" id="scheduleToggleContainer">
+          <input type="checkbox" id="scheduleToggle" />
+          <span class="toggle-label" for="scheduleToggle">Schedule for later</span>
+        </div>
+
+        <!-- Date time picker container -->
+        <div id="scheduleTimeContainer">
+          <label for="scheduleTime">Publish Date & Time</label>
+          <input type="datetime-local" id="scheduleTime" />
+        </div>
+
+        <button id="uploadButton" class="primary-btn">Upload</button>
+
+        <div class="progress" id="progressContainer">
+          <div class="progress-bar" id="progressBar"></div>
+        </div>
+
+        <div id="processLog"></div>
+      </div>
+
+      <!-- Tab 2: Scheduled Panel -->
+      <div id="panelScheduled" class="tab-panel">
+        <div class="scheduled-list" id="scheduledList">
+          <!-- Will be filled by popup.js -->
+        </div>
+        <div class="empty-state" id="scheduledEmptyState" style="display: none;">
+          <svg class="empty-state-icon" viewBox="0 0 24 24">
+            <circle cx="12" cy="12" r="10" />
+            <polyline points="12 6 12 12 16 14" />
+          </svg>
+          <div class="empty-state-text">No scheduled uploads yet. Check "Schedule for later" to queue your videos.</div>
+        </div>
+      </div>
+
+      <!-- Shared Status Message -->
+      <div class="status" id="statusMessage"></div>
+    </div>
+
+    <script src="popup.js"></script>
+  </body>
+</html>
