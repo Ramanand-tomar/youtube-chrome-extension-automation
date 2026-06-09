@@ -1,5 +1,13 @@
 const { Pool } = require('pg');
 
+if (!process.env.DATABASE_URL) {
+  console.error('========================================================');
+  console.error('[DB FATAL] DATABASE_URL environment variable is not set!');
+  console.error('Please configure DATABASE_URL in your Render dashboard.');
+  console.error('========================================================');
+  process.exit(1);
+}
+
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false },
@@ -7,6 +15,7 @@ const pool = new Pool({
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 5000,
 });
+
 
 /**
  * Create tables if they don't exist yet.
