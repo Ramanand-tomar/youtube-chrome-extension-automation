@@ -72,22 +72,29 @@ function extractTitleFromUrl(videoUrl) {
   return 'YouTube Short';
 }
 
-function buildYtdlpArgs(videoUrl, outputPath, simpleFormat = false) {
+function buildYtdlpArgs(videoUrl, outputPath, strategy = 'best') {
+  // strategy: 'best' (full), 'simple' (-f best), 'video-only' (best video without audio merge)
   const baseArgs = [
     '--no-playlist',
-    '--retries', '3',
-    '--fragment-retries', '3',
+    '--retries', '5',
+    '--fragment-retries', '5',
+    '--extractor-args', 'youtube:skip=hls/dash',
     '--user-agent', 'Mozilla/5.0 (Linux; Android 11; Pixel 5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36',
+    '--socket-timeout', '30',
     '--sleep-interval', '2',
-    '--max-sleep-interval', '5',
+    '--max-sleep-interval', '8',
     '-o', outputPath,
     videoUrl,
   ];
 
-  if (simpleFormat) {
-    baseArgs.splice(1, 0, '-f', 'best');
-  } else {
+  if (strategy === 'best') {
     baseArgs.splice(1, 0, '-f', 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best', '--merge-output-format', 'mp4');
+  } else if (strategy === 'video-only') {
+    baseArgs.splice(1, 0, '-f', 'best[ext=mp4]');
+  } else if (strategy === 'simple') {
+    baseArgs.splice(1, 0, '-f', 'b');
+  } else if (strategy === 'any') {
+    // No format spec - let yt-dlp choose
   }
 
   if (fs.pathExistsSync(YOUTUBE_COOKIES_PATH)) {
@@ -118,23 +125,30 @@ function runYtdlp(args) {
 }
 
 async function downloadVideo(videoUrl, outputPath) {
-  const primaryArgs = buildYtdlpArgs(videoUrl, outputPath, false);
-  try {
-    await runYtdlp(primaryArgs);
-  } catch (error) {
-    const message = error.message || '';
-    if (message.includes('Requested format is not available') || message.includes('Only images are available') || message.includes('GVS PO Token') || message.includes('challenge solving failed')) {
-      console.warn('[yt-dlp] Primary download failed on YouTube format extraction. Retrying with a simpler download request.');
-      const fallbackArgs = buildYtdlpArgs(videoUrl, outputPath, true);
-      await runYtdlp(fallbackArgs);
-    } else {
-      const errText = message;
-      if (errText.includes('Sign in to confirm') || errText.includes('not a bot')) {
+  const strategies = ['best', 'video-only', 'simple', 'any'];
+  let lastError = null;
+
+  for (const strategy of strategies) {
+    try {
+      console.log(`[yt-dlp] Attempting download with strategy: ${strategy}`);
+      const args = buildYtdlpArgs(videoUrl, outputPath, strategy);
+      await runYtdlp(args);
+      console.log(`[yt-dlp] Download succeeded with strategy: ${strategy}`);
+      break;
+    } catch (error) {
+      lastError = error;
+      const message = error.message || '';
+      console.warn(`[yt-dlp] Strategy "${strategy}" failed. Trying next strategy...`);
+
+      if (message.includes('Sign in to confirm') || message.includes('not a bot')) {
         throw new Error(
           'YouTube is blocking the download (bot check). Please upload YouTube cookies via the Account tab → "Upload YouTube Cookies" to fix this.'
         );
       }
-      throw error;
+
+      if (strategy === 'any') {
+        throw new Error(`All download strategies failed. Last error: ${message}`);
+      }
     }
   }
 

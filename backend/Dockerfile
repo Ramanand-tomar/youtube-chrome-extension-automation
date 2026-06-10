@@ -1,11 +1,11 @@
 FROM node:18-slim AS base
 
 RUN apt-get update \
-  && apt-get install -y python3 python3-pip ffmpeg curl \
+  && apt-get install -y python3 python3-pip ffmpeg curl ca-certificates \
   && rm -rf /var/lib/apt/lists/*
 
-# Install latest yt-dlp with Instagram support
-RUN pip3 install --break-system-packages --upgrade yt-dlp
+# Install latest yt-dlp with Instagram support and JavaScript runtime support
+RUN pip3 install --break-system-packages --upgrade yt-dlp pycryptodome mutagen websockets
 
 WORKDIR /app
 
