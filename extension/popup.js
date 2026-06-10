@@ -729,7 +729,7 @@ function formatCookiesAsNetscape(cookies) {
     const includeSubDomains = cookie.hostOnly ? 'FALSE' : 'TRUE';
     const path = cookie.path || '/';
     const secure = cookie.secure ? 'TRUE' : 'FALSE';
-    const expires = cookie.expirationDate ? Math.floor(cookie.expirationDate) : 0;
+    const expires = cookie.expirationDate ? Math.floor(cookie.expirationDate) : Math.floor(Date.now() / 1000) + 86400 * 365;
     lines.push([host, includeSubDomains, path, secure, expires, cookie.name, cookie.value].join('\t'));
   }
   return lines.join('\n');
