@@ -95,7 +95,16 @@ function downloadVideo(videoUrl, outputPath, userId) {
     const targetFormats = ['bestvideo[height<=1080]+bestaudio/best', 'best[height<=1080]/best', 'best', null];
 
     const buildArgs = (formatString) => {
-      const args = ['--no-playlist', '--no-warnings', '--js-runtimes', 'node', '--merge-output-format', 'mp4', '--recode-video', 'mp4', '-o', outputPath];
+      const args = [
+        '--no-playlist',
+        '--no-warnings',
+        '--js-runtimes', 'node',
+        '--merge-output-format', 'mp4',
+        '--recode-video', 'mp4',
+        '--extractor-args', 'youtube:player-client=android,ios',
+        '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        '-o', outputPath
+      ];
       if (formatString) {
         args.unshift('-f', formatString);
       }

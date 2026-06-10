@@ -52,7 +52,15 @@ async function _executeDownload(reelUrl, outputPath, userId) {
     const targetFormats = ['bestvideo[height<=1080]+bestaudio/best', 'best[height<=1080]/best', 'best', null];
 
     const buildArgs = (formatString) => {
-      const args = ['--no-playlist', '--no-warnings', '--js-runtimes', 'node', '--merge-output-format', 'mp4', '--recode-video', 'mp4', '-o', outputPath, reelUrl];
+      const args = [
+        '--no-playlist',
+        '--no-warnings',
+        '--js-runtimes', 'node',
+        '--merge-output-format', 'mp4',
+        '--recode-video', 'mp4',
+        '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        '-o', outputPath, reelUrl
+      ];
       if (formatString) {
         args.unshift('-f', formatString);
       }
@@ -130,7 +138,13 @@ async function _executeDownload(reelUrl, outputPath, userId) {
  */
 async function extractInstagramMetadata(reelUrl, userId) {
   return new Promise((resolve, reject) => {
-    const args = ['--dump-json', '--no-warnings', '--js-runtimes', 'node', reelUrl];
+    const args = [
+      '--dump-json',
+      '--no-warnings',
+      '--js-runtimes', 'node',
+      '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      reelUrl
+    ];
 
     // Add cookies if available
     const userCookiesPath = getInstagramCookiesPath(userId);
