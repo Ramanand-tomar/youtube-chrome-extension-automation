@@ -49,10 +49,13 @@ async function downloadInstagramReel(reelUrl, outputPath, userId, maxRetries = 3
  */
 async function _executeDownload(reelUrl, outputPath, userId) {
   return new Promise((resolve, reject) => {
-    const targetFormats = ['bestvideo[height<=1080]+bestaudio/best', 'best[height<=1080]/best', 'best'];
+    const targetFormats = ['bestvideo[height<=1080]+bestaudio/best', 'best[height<=1080]/best', 'best', null];
 
     const buildArgs = (formatString) => {
-      const args = ['--no-playlist', '--no-warnings', '--js-runtimes', 'node', '-f', formatString, '--merge-output-format', 'mp4', '--recode-video', 'mp4', '-o', outputPath, reelUrl];
+      const args = ['--no-playlist', '--no-warnings', '--js-runtimes', 'node', '--merge-output-format', 'mp4', '--recode-video', 'mp4', '-o', outputPath, reelUrl];
+      if (formatString) {
+        args.unshift('-f', formatString);
+      }
       const userCookiesPath = getInstagramCookiesPath(userId);
       if (userId && fs.pathExistsSync(userCookiesPath)) {
         args.unshift(`--cookies=${userCookiesPath}`);

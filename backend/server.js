@@ -92,10 +92,13 @@ function extractTitleFromUrl(videoUrl) {
 
 function downloadVideo(videoUrl, outputPath, userId) {
   return new Promise((resolve, reject) => {
-    const targetFormats = ['bestvideo[height<=1080]+bestaudio/best', 'best[height<=1080]/best', 'best'];
+    const targetFormats = ['bestvideo[height<=1080]+bestaudio/best', 'best[height<=1080]/best', 'best', null];
 
     const buildArgs = (formatString) => {
-      const args = ['--no-playlist', '--no-warnings', '--js-runtimes', 'node', '-f', formatString, '--merge-output-format', 'mp4', '--recode-video', 'mp4', '-o', outputPath];
+      const args = ['--no-playlist', '--no-warnings', '--js-runtimes', 'node', '--merge-output-format', 'mp4', '--recode-video', 'mp4', '-o', outputPath];
+      if (formatString) {
+        args.unshift('-f', formatString);
+      }
       const userCookiesPath = getYoutubeCookiesPath(userId);
       if (userId && fs.existsSync(userCookiesPath)) {
         args.unshift('--cookies', userCookiesPath);
