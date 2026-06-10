@@ -10,6 +10,8 @@ const cloudinary = require('cloudinary').v2;
 const { google } = require('googleapis');
 const cron = require('node-cron');
 const multer = require('multer');
+const axios = require('axios');
+const { downloadFile } = require('./utils/downloader');
 
 const YTDLP_COMMAND = process.env.YTDLP_COMMAND || 'yt-dlp';
 
@@ -90,137 +92,63 @@ function extractTitleFromUrl(videoUrl) {
   return 'YouTube Short';
 }
 
-function downloadVideo(videoUrl, outputPath, userId, userAgent = null) {
-  return new Promise((resolve, reject) => {
-    const attempts = [];
-    const userCookiesPath = getYoutubeCookiesPath(userId);
-    const hasCookiesFile = userId && fs.existsSync(userCookiesPath);
+function extractYoutubeId(urlStr) {
+  try {
+    const url = new URL(urlStr);
+    if (url.hostname.includes('youtube.com')) {
+      return url.searchParams.get('v') || url.pathname.split('/').filter(Boolean).pop();
+    }
+    if (url.hostname.includes('youtu.be')) {
+      return url.pathname.slice(1);
+    }
+  } catch (err) {}
+  return null;
+}
 
-    if (hasCookiesFile) {
-      try {
-        const content = fs.readFileSync(userCookiesPath, 'utf8');
-        const hasSessionCookie = content.includes('LOGIN_INFO') || content.includes('__Secure-3PSID') || content.includes('__Secure-3PAPISID');
-        console.log(`[Cookies Check] Path=${userCookiesPath}, Size=${content.length} bytes, HasSessionAuth=${hasSessionCookie}`);
-      } catch (err) {
-        console.error(`[Cookies Check] Error reading cookies:`, err.message);
-      }
+async function downloadVideo(videoUrl, outputPath, userId, userAgent = null) {
+  const videoId = extractYoutubeId(videoUrl);
+  if (!videoId) {
+    throw new Error('Invalid YouTube URL');
+  }
+
+  const options = {
+    method: 'GET',
+    url: 'https://ytstream-download-youtube-videos.p.rapidapi.com/dl',
+    params: { id: videoId },
+    headers: {
+      'x-rapidapi-key': process.env.RAPIDAPI_KEY || '7bb80227bemsh50cc3a7ae12938fp16806ajsn1978e3268063',
+      'x-rapidapi-host': 'ytstream-download-youtube-videos.p.rapidapi.com',
+      'Content-Type': 'application/json'
+    }
+  };
+
+  try {
+    console.log(`[YouTube Download] Calling RapidAPI for video ID: ${videoId}`);
+    const response = await axios.request(options);
+    const data = response.data;
+    
+    if (data.status !== 'OK' && !data.formats) {
+      throw new Error('Failed to get download links from RapidAPI');
     }
 
-    const formats = ['bestvideo[height<=1080]+bestaudio/best', 'best[height<=1080]/best', 'best'];
-    const clientConfigs = [
-      { name: 'android,ios', args: ['--extractor-args', 'youtube:player-client=android,ios'] },
-      { name: 'web_embedded,web,tv', args: ['--extractor-args', 'youtube:player-client=web_embedded,web,tv'] },
-      { name: 'default', args: [] }
-    ];
-
-    // Build combinations: cookies first, then anonymous.
-    if (hasCookiesFile) {
-      for (const clientConfig of clientConfigs) {
-        for (const format of formats) {
-          attempts.push({ format, clientConfig, useCookies: true });
-        }
-      }
-    }
-    for (const clientConfig of clientConfigs) {
-      for (const format of formats) {
-        attempts.push({ format, clientConfig, useCookies: false });
-      }
+    let bestFormat = null;
+    if (data.formats && data.formats.length > 0) {
+      bestFormat = data.formats[0];
+    } else if (data.adaptiveFormats && data.adaptiveFormats.length > 0) {
+      bestFormat = data.adaptiveFormats[0];
     }
 
-    const buildArgs = (formatString, clientConfig, useCookies) => {
-      const activeUserAgent = userAgent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
-      const args = [
-        '-4', // Force IPv4 to bypass strict cloud IPv6 blocks
-        '--no-playlist',
-        '--no-warnings',
-        '--no-check-certificates',
-        '--js-runtimes', 'node',
-        '--merge-output-format', 'mp4',
-        '--recode-video', 'mp4',
-        '--user-agent', activeUserAgent,
-        '-o', outputPath
-      ];
-      // Route through a proxy if configured in Render environment variables
-      if (process.env.PROXY_URL) {
-        args.push('--proxy', process.env.PROXY_URL);
-      }
-      // Add client configuration arguments (e.g., extractor args)
-      if (clientConfig && clientConfig.args) {
-        args.push(...clientConfig.args);
-      }
-      if (formatString) {
-        args.unshift('-f', formatString);
-      }
-      if (useCookies && hasCookiesFile) {
-        args.unshift('--cookies', userCookiesPath);
-      }
-      args.push(videoUrl);
-      return args;
-    };
+    if (!bestFormat || !bestFormat.url) {
+      throw new Error('No suitable video format found.');
+    }
 
-    const tryAttempt = (index, lastError = null) => {
-      if (index >= attempts.length) {
-        return reject(lastError || new Error('yt-dlp failed to download the video after trying all format, client, and cookie fallbacks.'));
-      }
-
-      const { format, clientConfig, useCookies } = attempts[index];
-      const args = buildArgs(format, clientConfig, useCookies);
-      
-      console.log(`[Download] Attempt ${index + 1}/${attempts.length}: format=${format}, client=${clientConfig.name}, cookies=${useCookies}`);
-      
-      const ytProcess = spawn(YTDLP_COMMAND, args);
-      let stderr = '';
-      let stdout = '';
-
-      ytProcess.stdout.on('data', (chunk) => { stdout += chunk.toString(); });
-      ytProcess.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
-
-      ytProcess.on('error', (error) => {
-        if (error.code === 'ENOENT') {
-          return reject(new Error('yt-dlp executable not found. Install yt-dlp or set YTDLP_COMMAND to a valid command.'));
-        }
-        reject(error);
-      });
-
-      ytProcess.on('close', async (code) => {
-        const errorMsg = stderr.trim() || stdout.trim();
-        if (code !== 0) {
-          const isBotBlock = 
-            errorMsg.includes('Sign in to confirm you\'re not a bot') ||
-            errorMsg.includes('confirm you are not a bot') ||
-            errorMsg.includes('403 Forbidden') ||
-            errorMsg.includes('429 Too Many Requests');
-
-          let nextIndex = index + 1;
-          if (isBotBlock) {
-            // Skip other formats under the current group (useCookies + clientConfig)
-            while (
-              nextIndex < attempts.length &&
-              attempts[nextIndex].useCookies === useCookies &&
-              attempts[nextIndex].clientConfig.name === clientConfig.name
-            ) {
-              nextIndex++;
-            }
-            console.warn(`yt-dlp attempt ${index} blocked (bot detection). Skipping remaining formats in group ${clientConfig.name} (cookies=${useCookies}). Trying next group at index ${nextIndex}...`);
-          } else {
-            console.warn(`yt-dlp attempt ${index} failed: format=${format}, client=${clientConfig.name}, cookies=${useCookies}. Error: ${errorMsg}. Trying next attempt...`);
-          }
-
-          return tryAttempt(nextIndex, new Error(`yt-dlp exited with code ${code}: ${errorMsg}`));
-        }
-
-        try {
-          const exists = await fs.pathExists(outputPath);
-          if (!exists) return reject(new Error('Downloaded video file not found.'));
-          resolve(outputPath);
-        } catch (error) {
-          reject(error);
-        }
-      });
-    };
-
-    tryAttempt(0);
-  });
+    console.log(`[YouTube Download] Format found. Downloading MP4 to ${outputPath}...`);
+    await downloadFile(bestFormat.url, outputPath);
+    return outputPath;
+  } catch (error) {
+    console.error('[YouTube Download Error]', error.message);
+    throw new Error(`YouTube download failed: ${error.message}`);
+  }
 }
 
 async function uploadToCloudinary(localPath) {
