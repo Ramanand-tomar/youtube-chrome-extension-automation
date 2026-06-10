@@ -90,7 +90,7 @@ function extractTitleFromUrl(videoUrl) {
   return 'YouTube Short';
 }
 
-function downloadVideo(videoUrl, outputPath, userId) {
+function downloadVideo(videoUrl, outputPath, userId, userAgent = null) {
   return new Promise((resolve, reject) => {
     const attempts = [];
     const userCookiesPath = getYoutubeCookiesPath(userId);
@@ -118,13 +118,15 @@ function downloadVideo(videoUrl, outputPath, userId) {
     }
 
     const buildArgs = (formatString, clientConfig, useCookies) => {
+      const activeUserAgent = userAgent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
       const args = [
+        '-4', // Force IPv4 to bypass strict cloud IPv6 blocks
         '--no-playlist',
         '--no-warnings',
         '--js-runtimes', 'node',
         '--merge-output-format', 'mp4',
         '--recode-video', 'mp4',
-        '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        '--user-agent', activeUserAgent,
         '-o', outputPath
       ];
       // Add client configuration arguments (e.g., extractor args)
@@ -523,7 +525,7 @@ app.post('/api/process', authenticateToken, async (req, res) => {
   let downloadedPath = null;
 
   try {
-    const { videoUrl, title, description, privacy } = req.body || {};
+    const { videoUrl, title, description, privacy, userAgent } = req.body || {};
 
     if (!videoUrl || typeof videoUrl !== 'string') throw new Error('Missing videoUrl');
 
@@ -535,7 +537,7 @@ app.post('/api/process', authenticateToken, async (req, res) => {
 
     downloadedPath = path.join(DOWNLOADS_DIR, `download-${Date.now()}.mp4`);
     sendStep({ step: 'downloading', message: 'Starting video download...' });
-    await downloadVideo(videoUrl, downloadedPath, req.userId);
+    await downloadVideo(videoUrl, downloadedPath, req.userId, userAgent);
     sendStep({ step: 'downloading', message: 'Video download complete.' });
 
     // Cloudinary upload bypassed - directly uploading downloadedPath to YouTube
@@ -572,7 +574,7 @@ app.post('/api/process-batch', authenticateToken, async (req, res) => {
   const sendStep = (payload) => res.write(`${JSON.stringify(payload)}\n`);
 
   try {
-    const { urls = [], defaultCredit = true, globalTitle = '', globalDescription = '' } = req.body || {};
+    const { urls = [], defaultCredit = true, globalTitle = '', globalDescription = '', userAgent } = req.body || {};
 
     if (!Array.isArray(urls) || urls.length === 0) throw new Error('Missing or empty urls array');
     if (urls.length > 10) throw new Error('Maximum 10 reels per batch submission');
@@ -609,7 +611,8 @@ app.post('/api/process-batch', authenticateToken, async (req, res) => {
             sendStep({ step: 'batch-processing', message: `Reel ${reelIndex}: ${message}`, reel: reelIndex, total: urls.length, status: 'processing' });
           },
           null,
-          req.userId
+          req.userId,
+          userAgent
         );
 
         successCount++;
@@ -708,16 +711,16 @@ app.get('/api/quota', authenticateToken, async (req, res) => {
 });
 
 // ─── processInstagramReel ─────────────────────────────────────────────────────
-async function processInstagramReel(reelUrl, globalTitle, globalDescription, creditUser, progressCallback, publishAt = null, userId) {
+async function processInstagramReel(reelUrl, globalTitle, globalDescription, creditUser, progressCallback, publishAt = null, userId, userAgent = null) {
   let downloadedPath = null;
 
   try {
     progressCallback('Extracting metadata...');
-    const metadata = await instagram.extractInstagramMetadata(reelUrl, userId);
+    const metadata = await instagram.extractInstagramMetadata(reelUrl, userId, userAgent);
 
     progressCallback('Downloading reel...');
     downloadedPath = path.join(DOWNLOADS_DIR, `instagram-${Date.now()}.mp4`);
-    await instagram.downloadInstagramReel(reelUrl, downloadedPath, userId);
+    await instagram.downloadInstagramReel(reelUrl, downloadedPath, userId, userAgent);
 
     // Cloudinary upload bypassed
 

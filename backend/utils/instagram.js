@@ -15,7 +15,7 @@ function getInstagramCookiesPath(userId) {
 /**
  * Download Instagram Reel with retry logic and metadata extraction
  */
-async function downloadInstagramReel(reelUrl, outputPath, userId, maxRetries = 3) {
+async function downloadInstagramReel(reelUrl, outputPath, userId, userAgent = null, maxRetries = 3) {
   let lastError;
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
@@ -27,7 +27,7 @@ async function downloadInstagramReel(reelUrl, outputPath, userId, maxRetries = 3
         await new Promise((resolve) => setTimeout(resolve, delay));
       }
 
-      return await _executeDownload(reelUrl, outputPath, userId);
+      return await _executeDownload(reelUrl, outputPath, userId, userAgent);
     } catch (error) {
       lastError = error;
       console.warn(`Instagram reel download attempt ${attempt}/${maxRetries} failed:`, error.message);
@@ -47,7 +47,7 @@ async function downloadInstagramReel(reelUrl, outputPath, userId, maxRetries = 3
 /**
  * Execute yt-dlp download for Instagram reel
  */
-async function _executeDownload(reelUrl, outputPath, userId) {
+async function _executeDownload(reelUrl, outputPath, userId, userAgent = null) {
   return new Promise((resolve, reject) => {
     const attempts = [];
     const userCookiesPath = getInstagramCookiesPath(userId);
@@ -65,13 +65,15 @@ async function _executeDownload(reelUrl, outputPath, userId) {
     }
 
     const buildArgs = (formatString, useCookies) => {
+      const activeUserAgent = userAgent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
       const args = [
+        '-4', // Force IPv4
         '--no-playlist',
         '--no-warnings',
         '--js-runtimes', 'node',
         '--merge-output-format', 'mp4',
         '--recode-video', 'mp4',
-        '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        '--user-agent', activeUserAgent,
         '-o', outputPath, reelUrl
       ];
       if (formatString) {
@@ -157,13 +159,15 @@ async function _executeDownload(reelUrl, outputPath, userId) {
 /**
  * Extract metadata from Instagram reel using yt-dlp --dump-json
  */
-async function extractInstagramMetadata(reelUrl, userId) {
+async function extractInstagramMetadata(reelUrl, userId, userAgent = null) {
   return new Promise((resolve, reject) => {
+    const activeUserAgent = userAgent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
     const args = [
+      '-4', // Force IPv4
       '--dump-json',
       '--no-warnings',
       '--js-runtimes', 'node',
-      '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      '--user-agent', activeUserAgent,
       reelUrl
     ];
 
