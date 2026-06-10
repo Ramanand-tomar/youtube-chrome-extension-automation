@@ -73,38 +73,25 @@ function extractTitleFromUrl(videoUrl) {
 }
 
 function buildYtdlpArgs(videoUrl, outputPath, strategy = 'best', useCookies = true) {
-  // strategy: 'best' (full), 'video-only' (best MP4), 'simple' (quick), 'android' (Android client), 'any' (any available)
   const baseArgs = [
     '--no-playlist',
     '--retries', '5',
     '--fragment-retries', '5',
-    '--user-agent', 'Mozilla/5.0 (Linux; Android 13; Pixel 8 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36',
-    '--socket-timeout', '30',
-    '--sleep-interval', '2',
-    '--max-sleep-interval', '8',
-    '--no-check-certificate',
-    '--geo-bypass',
-    '--add-header', 'Accept-Language: en-US,en;q=0.9',
-    '--js-runtimes', 'node:/usr/local/bin/node',
     '-o', outputPath,
   ];
 
   if (strategy === 'best') {
-    baseArgs.push('-f', 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best', '--merge-output-format', 'mp4');
+    baseArgs.push('-f', 'best');
   } else if (strategy === 'video-only') {
-    baseArgs.push('-f', 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best', '--merge-output-format', 'mp4');
-  } else if (strategy === 'simple') {
-    baseArgs.push('-f', 'best[ext=mp4]/best');
+    baseArgs.push('-f', 'best[ext=mp4]');
   } else if (strategy === 'android') {
-    baseArgs.push('-f', 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best', '--merge-output-format', 'mp4');
-    baseArgs.push('--extractor-args', 'youtube:player_client=android:player_mode=tv');
+    baseArgs.push('-f', 'best');
+    baseArgs.push('--extractor-args', 'youtube:player_client=android');
   }
 
   if (useCookies && fs.pathExistsSync(YOUTUBE_COOKIES_PATH)) {
     baseArgs.unshift(`--cookies=${YOUTUBE_COOKIES_PATH}`);
     console.log('[yt-dlp] Using YouTube cookies file for download');
-  } else if (useCookies) {
-    console.warn('[yt-dlp] No YouTube cookies file found. If downloads fail with bot-check errors, upload cookies via /api/youtube/cookies');
   }
 
   baseArgs.push(videoUrl);
@@ -144,47 +131,14 @@ async function downloadVideo(videoUrl, outputPath) {
       const args = buildYtdlpArgs(videoUrl, outputPath, strategy, useCookies);
       await runYtdlp(args);
       console.log(`[yt-dlp] Download succeeded with strategy: ${strategy}`);
-      lastError = null;
-      break;
+      return outputPath;
     } catch (error) {
-      lastError = error;
-      const message = error.message || '';
-      console.warn(`[yt-dlp] Strategy "${strategy}" failed. Trying next strategy...`);
-
-      if (strategy === 'any') {
-        break;
-      }
+      console.warn(`[yt-dlp] Strategy "${strategy}" failed: ${error.message}`);
     }
   }
 
-  if (lastError) {
-    const message = lastError.message || '';
-    const lower = message.toLowerCase();
-    const isBotCheck = lower.includes('sign in to confirm') || lower.includes('not a bot') || lower.includes('bot check') || lower.includes('blocking the download');
-
-    // Truncate long stderr for safer output
-    const truncated = message.length > 1200 ? message.slice(0, 1200) + '\n...[truncated]' : message;
-    console.error('[yt-dlp] Last error (truncated):', truncated);
-
-    if (isBotCheck) {
-      // Provide actionable guidance when bot checks are detected even if a cookies file exists
-      const guidance = [
-        'YouTube is blocking the download (bot check).',
-        'Although a cookies file was provided, the cookies may be expired or missing required auth cookies (e.g. SAPISID/SID/HSID).',
-        'Action: Re-export your YouTube cookies in Netscape (cookies.txt) format from a logged-in Chrome profile and re-upload via the Account tab → "Upload YouTube Cookies".',
-        "Make sure the exported file contains entries for 'youtube.com' and includes authentication cookies (SAPISID, HSID, SID).",
-        'If the issue persists, try logging into a different Google account in your browser and uploading those cookies, or remove and re-add the cookies file.',
-      ].join(' ');
-
-      throw new Error(`${guidance} (yt-dlp error: ${truncated})`);
-    }
-
-    throw new Error(`All download strategies failed. Last error: ${truncated}`);
-  }
-
-  const exists = await fs.pathExists(outputPath);
-  if (!exists) throw new Error('Downloaded video file not found.');
-  return outputPath;
+  throw new Error('YouTube download failed with all strategies. Try uploading fresh YouTube cookies.');
+}
 }
 
 async function uploadToCloudinary(localPath) {
