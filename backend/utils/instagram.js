@@ -46,6 +46,8 @@ async function downloadInstagramReel(reelUrl, outputPath, maxRetries = 3) {
  */
 async function _executeDownload(reelUrl, outputPath) {
   return new Promise((resolve, reject) => {
+    const targetFormats = ['bestvideo[height<=1080]+bestaudio/best', 'best[height<=1080]/best', 'best'];
+
     const buildArgs = (formatString) => {
       const args = ['--no-playlist', '--no-warnings', '--js-runtimes', 'node', '-f', formatString, '--merge-output-format', 'mp4', '--recode-video', 'mp4', '-o', outputPath, reelUrl];
       if (fs.pathExistsSync(INSTAGRAM_COOKIES_PATH)) {
@@ -54,11 +56,13 @@ async function _executeDownload(reelUrl, outputPath) {
       return args;
     };
 
-    const primaryArgs = buildArgs('bestvideo[ext=mp4][height<=1080]+bestaudio/best[ext=mp4]/best[ext=mp4]/best');
-    const fallbackArgs = buildArgs('best[ext=mp4]/best');
+    const tryFormat = (index, lastError = null) => {
+      if (index >= targetFormats.length) {
+        return reject(lastError || new Error('yt-dlp failed to download the Instagram reel.'));
+      }
 
-    const runProcess = (argsToUse, isFallback = false) => {
-      const ytProcess = spawn(YTDLP_COMMAND, argsToUse);
+      const args = buildArgs(targetFormats[index]);
+      const ytProcess = spawn(YTDLP_COMMAND, args);
       let stderr = '';
       let stdout = '';
 
@@ -72,7 +76,7 @@ async function _executeDownload(reelUrl, outputPath) {
 
       ytProcess.on('error', (error) => {
         if (error.code === 'ENOENT') {
-          return reject(new Error(`yt-dlp executable not found. Install yt-dlp or set YTDLP_COMMAND to a valid command.`));
+          return reject(new Error('yt-dlp executable not found. Install yt-dlp or set YTDLP_COMMAND to a valid command.'));
         }
         reject(error);
       });
@@ -80,9 +84,12 @@ async function _executeDownload(reelUrl, outputPath) {
       ytProcess.on('close', async (code) => {
         const errorMsg = stderr.trim() || stdout.trim();
         if (code !== 0) {
-          if (!isFallback && errorMsg.includes('Requested format is not available')) {
-            return runProcess(fallbackArgs, true);
+          const nextIndex = index + 1;
+          if (nextIndex < targetFormats.length) {
+            console.warn(`yt-dlp format ${targetFormats[index]} failed: ${errorMsg}. Trying fallback ${targetFormats[nextIndex]}.`);
+            return tryFormat(nextIndex, new Error(`yt-dlp exited with code ${code}: ${errorMsg}`));
           }
+
           if (errorMsg.includes('Login required') || errorMsg.includes('Private account')) {
             return reject(new Error('Login required: Please upload cookies.txt to proceed.'));
           }
@@ -107,54 +114,7 @@ async function _executeDownload(reelUrl, outputPath) {
       });
     };
 
-    runProcess(primaryArgs);
-    let stderr = '';
-    let stdout = '';
-
-    ytProcess.stdout.on('data', (chunk) => {
-      stdout += chunk.toString();
-    });
-
-    ytProcess.stderr.on('data', (chunk) => {
-      stderr += chunk.toString();
-    });
-
-    ytProcess.on('error', (error) => {
-      if (error.code === 'ENOENT') {
-        return reject(new Error(`yt-dlp executable not found. Install yt-dlp or set YTDLP_COMMAND to a valid command.`));
-      }
-      reject(error);
-    });
-
-    ytProcess.on('close', async (code) => {
-      if (code !== 0) {
-        const errorMsg = stderr.trim() || stdout.trim();
-
-        if (errorMsg.includes('Login required') || errorMsg.includes('Private account')) {
-          return reject(new Error('Login required: Please upload cookies.txt to proceed.'));
-        }
-
-        if (errorMsg.includes('HTTP Error 429')) {
-          return reject(new Error('Rate limited: Instagram blocked the request. Please wait 15 minutes and retry.'));
-        }
-
-        if (errorMsg.includes('not found') || errorMsg.includes('does not exist')) {
-          return reject(new Error('Reel not found or deleted.'));
-        }
-
-        return reject(new Error(`yt-dlp exited with code ${code}: ${errorMsg}`));
-      }
-
-      try {
-        const exists = await fs.pathExists(outputPath);
-        if (!exists) {
-          return reject(new Error('Downloaded reel file not found.'));
-        }
-        resolve(outputPath);
-      } catch (error) {
-        reject(error);
-      }
-    });
+    tryFormat(0);
   });
 }
 

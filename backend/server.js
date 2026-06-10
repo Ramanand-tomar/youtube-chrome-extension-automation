@@ -75,6 +75,8 @@ function extractTitleFromUrl(videoUrl) {
 
 function downloadVideo(videoUrl, outputPath) {
   return new Promise((resolve, reject) => {
+    const targetFormats = ['bestvideo[height<=1080]+bestaudio/best', 'best[height<=1080]/best', 'best'];
+
     const buildArgs = (formatString) => {
       const args = ['--no-playlist', '--no-warnings', '--js-runtimes', 'node', '-f', formatString, '--merge-output-format', 'mp4', '--recode-video', 'mp4', '-o', outputPath];
       if (fs.existsSync(YOUTUBE_COOKIES_PATH)) {
@@ -84,25 +86,33 @@ function downloadVideo(videoUrl, outputPath) {
       return args;
     };
 
-    const primaryArgs = buildArgs('bestvideo[ext=mp4][height<=1080]+bestaudio/best[ext=mp4]/best[ext=mp4]/best');
-    const fallbackArgs = buildArgs('best[ext=mp4]/best');
+    const tryFormat = (index, lastError = null) => {
+      if (index >= targetFormats.length) {
+        return reject(lastError || new Error('yt-dlp failed to download the video.'));
+      }
 
-    const runProcess = (argsToUse, isFallback = false) => {
-      const ytProcess = spawn(YTDLP_COMMAND, argsToUse);
+      const args = buildArgs(targetFormats[index]);
+      const ytProcess = spawn(YTDLP_COMMAND, args);
       let stderr = '';
+      let stdout = '';
 
+      ytProcess.stdout.on('data', (chunk) => { stdout += chunk.toString(); });
       ytProcess.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
+
       ytProcess.on('error', (error) => {
         if (error.code === 'ENOENT') {
-          return reject(new Error(`yt-dlp executable not found. Install yt-dlp or set YTDLP_COMMAND to a valid command.`));
+          return reject(new Error('yt-dlp executable not found. Install yt-dlp or set YTDLP_COMMAND to a valid command.'));
         }
         reject(error);
       });
+
       ytProcess.on('close', async (code) => {
-        const errorMsg = stderr.trim();
+        const errorMsg = stderr.trim() || stdout.trim();
         if (code !== 0) {
-          if (!isFallback && errorMsg.includes('Requested format is not available')) {
-            return runProcess(fallbackArgs, true);
+          const nextIndex = index + 1;
+          if (nextIndex < targetFormats.length) {
+            console.warn(`yt-dlp format ${targetFormats[index]} failed: ${errorMsg}. Trying fallback format ${targetFormats[nextIndex]}.`);
+            return tryFormat(nextIndex, new Error(`yt-dlp exited with code ${code}: ${errorMsg}`));
           }
           return reject(new Error(`yt-dlp exited with code ${code}: ${errorMsg}`));
         }
@@ -117,7 +127,7 @@ function downloadVideo(videoUrl, outputPath) {
       });
     };
 
-    runProcess(primaryArgs);
+    tryFormat(0);
   });
 }
 
