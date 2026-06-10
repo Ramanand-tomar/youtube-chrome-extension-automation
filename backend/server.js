@@ -85,7 +85,7 @@ function buildYtdlpArgs(videoUrl, outputPath, strategy = 'best', useCookies = tr
     '--no-check-certificate',
     '--geo-bypass',
     '--add-header', 'Accept-Language: en-US,en;q=0.9',
-    '--js-runtimes', 'node',
+    '--js-runtimes', 'node:/usr/local/bin/node',
     '-o', outputPath,
   ];
 
