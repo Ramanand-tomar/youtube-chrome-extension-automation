@@ -72,7 +72,7 @@ function extractTitleFromUrl(videoUrl) {
 
 function downloadVideo(videoUrl, outputPath) {
   return new Promise((resolve, reject) => {
-    const args = ['--no-playlist', '--no-warnings', '--no-call-home', '--js-runtimes', 'node', '-f', 'best[ext=mp4]/best', '-o', outputPath];
+    const args = ['--no-playlist', '--no-warnings', '--js-runtimes', 'node', '-f', 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best', '--merge-output-format', 'mp4', '-o', outputPath];
     if (fs.existsSync(YOUTUBE_COOKIES_PATH)) {
       args.unshift('--cookies', YOUTUBE_COOKIES_PATH);
     }
