@@ -19,11 +19,8 @@ const db = require('./db');
 
 const PORT = process.env.PORT || 3000;
 const DOWNLOADS_DIR = path.resolve(__dirname, 'downloads');
-const COOKIES_DIR = path.resolve(__dirname, 'cookies');
-const YOUTUBE_COOKIES_PATH = path.join(COOKIES_DIR, 'youtube.txt');
 
 fs.ensureDirSync(DOWNLOADS_DIR);
-fs.ensureDirSync(COOKIES_DIR);
 
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -72,73 +69,21 @@ function extractTitleFromUrl(videoUrl) {
   return 'YouTube Short';
 }
 
-function buildYtdlpArgs(videoUrl, outputPath, strategy = 'best', useCookies = true) {
-  const baseArgs = [
-    '--no-playlist',
-    '--retries', '5',
-    '--fragment-retries', '5',
-    '-o', outputPath,
-  ];
-
-  if (strategy === 'best') {
-    baseArgs.push('-f', 'best');
-  } else if (strategy === 'video-only') {
-    baseArgs.push('-f', 'best[ext=mp4]');
-  } else if (strategy === 'android') {
-    baseArgs.push('-f', 'best');
-    baseArgs.push('--extractor-args', 'youtube:player_client=android');
-  }
-
-  if (useCookies && fs.pathExistsSync(YOUTUBE_COOKIES_PATH)) {
-    baseArgs.unshift(`--cookies=${YOUTUBE_COOKIES_PATH}`);
-    console.log('[yt-dlp] Using YouTube cookies file for download');
-  }
-
-  baseArgs.push(videoUrl);
-  return baseArgs;
-}
-
-function runYtdlp(args) {
+function downloadVideo(videoUrl, outputPath) {
   return new Promise((resolve, reject) => {
+    const args = ['--no-playlist', '-f', 'best[ext=mp4]/best', '-o', outputPath, videoUrl];
     const ytProcess = spawn('yt-dlp', args);
     let stderr = '';
 
     ytProcess.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
     ytProcess.on('error', reject);
     ytProcess.on('close', async (code) => {
-      if (code !== 0) {
-        const errText = stderr.trim();
-        return reject(new Error(`yt-dlp exited with code ${code}: ${errText}`));
-      }
-      resolve();
+      if (code !== 0) return reject(new Error(`yt-dlp exited with code ${code}: ${stderr.trim()}`));
+      const exists = await fs.pathExists(outputPath);
+      if (!exists) return reject(new Error('Downloaded video file not found.'));
+      resolve(outputPath);
     });
   });
-}
-
-async function downloadVideo(videoUrl, outputPath) {
-  const strategies = [
-    { name: 'best', useCookies: true },
-    { name: 'video-only', useCookies: true },
-    { name: 'android', useCookies: true },
-    { name: 'simple', useCookies: true },
-    { name: 'any', useCookies: true },
-  ];
-  let lastError = null;
-
-  for (const { name: strategy, useCookies } of strategies) {
-    try {
-      console.log(`[yt-dlp] Attempting download with strategy: ${strategy}`);
-      const args = buildYtdlpArgs(videoUrl, outputPath, strategy, useCookies);
-      await runYtdlp(args);
-      console.log(`[yt-dlp] Download succeeded with strategy: ${strategy}`);
-      return outputPath;
-    } catch (error) {
-      console.warn(`[yt-dlp] Strategy "${strategy}" failed: ${error.message}`);
-    }
-  }
-
-  throw new Error('YouTube download failed with all strategies. Try uploading fresh YouTube cookies.');
-}
 }
 
 async function uploadToCloudinary(localPath) {
@@ -506,58 +451,6 @@ app.delete('/api/instagram/cookies', async (req, res) => {
   try {
     await instagram.deleteCookies();
     res.json({ success: true, message: 'Instagram cookies deleted' });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// ─── YouTube Cookie Endpoints ────────────────────────────────────────────────
-
-/**
- * GET /api/youtube/cookies/status
- * Check whether a YouTube cookies file has been uploaded.
- */
-app.get('/api/youtube/cookies/status', async (req, res) => {
-  try {
-    const hasCookies = await fs.pathExists(YOUTUBE_COOKIES_PATH);
-    res.json({ hasCookies, message: hasCookies ? 'YouTube cookies available' : 'No YouTube cookies found.' });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-/**
- * POST /api/youtube/cookies
- * Upload a Netscape-format cookies.txt file for YouTube authentication.
- */
-app.post('/api/youtube/cookies', upload.single('cookies'), async (req, res) => {
-  try {
-    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
-    const fileContent = await fs.readFile(req.file.path, 'utf8');
-    // Basic validation: ensure it looks like a Netscape cookies file
-    if (!fileContent.includes('youtube.com') && !fileContent.includes('Netscape')) {
-      await fs.remove(req.file.path);
-      return res.status(400).json({ error: 'File does not appear to be a valid YouTube cookies file (Netscape format). Make sure to export cookies from youtube.com.' });
-    }
-    await fs.copy(req.file.path, YOUTUBE_COOKIES_PATH);
-    await fs.remove(req.file.path);
-    console.log('[Cookies] YouTube cookies saved successfully');
-    res.json({ success: true, message: 'YouTube cookies uploaded and saved successfully. Downloads will now use your account to bypass bot checks.' });
-  } catch (error) {
-    if (req.file) await fs.remove(req.file.path).catch(() => {});
-    res.status(500).json({ error: error.message });
-  }
-});
-
-/**
- * DELETE /api/youtube/cookies
- * Remove the YouTube cookies file.
- */
-app.delete('/api/youtube/cookies', async (req, res) => {
-  try {
-    await fs.remove(YOUTUBE_COOKIES_PATH);
-    console.log('[Cookies] YouTube cookies deleted');
-    res.json({ success: true, message: 'YouTube cookies deleted.' });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
