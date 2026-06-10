@@ -92,36 +92,65 @@ function extractTitleFromUrl(videoUrl) {
 
 function downloadVideo(videoUrl, outputPath, userId) {
   return new Promise((resolve, reject) => {
-    const targetFormats = ['bestvideo[height<=1080]+bestaudio/best', 'best[height<=1080]/best', 'best', null];
+    const attempts = [];
+    const userCookiesPath = getYoutubeCookiesPath(userId);
+    const hasCookiesFile = userId && fs.existsSync(userCookiesPath);
 
-    const buildArgs = (formatString) => {
+    const formats = ['bestvideo[height<=1080]+bestaudio/best', 'best[height<=1080]/best', 'best'];
+    const clientConfigs = [
+      { name: 'android,ios', args: ['--extractor-args', 'youtube:player-client=android,ios'] },
+      { name: 'web_embedded,web,tv', args: ['--extractor-args', 'youtube:player-client=web_embedded,web,tv'] },
+      { name: 'default', args: [] }
+    ];
+
+    // Build combinations: cookies first, then anonymous.
+    if (hasCookiesFile) {
+      for (const clientConfig of clientConfigs) {
+        for (const format of formats) {
+          attempts.push({ format, clientConfig, useCookies: true });
+        }
+      }
+    }
+    for (const clientConfig of clientConfigs) {
+      for (const format of formats) {
+        attempts.push({ format, clientConfig, useCookies: false });
+      }
+    }
+
+    const buildArgs = (formatString, clientConfig, useCookies) => {
       const args = [
         '--no-playlist',
         '--no-warnings',
         '--js-runtimes', 'node',
         '--merge-output-format', 'mp4',
         '--recode-video', 'mp4',
-        '--extractor-args', 'youtube:player-client=android,ios',
         '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         '-o', outputPath
       ];
+      // Add client configuration arguments (e.g., extractor args)
+      if (clientConfig && clientConfig.args) {
+        args.push(...clientConfig.args);
+      }
       if (formatString) {
         args.unshift('-f', formatString);
       }
-      const userCookiesPath = getYoutubeCookiesPath(userId);
-      if (userId && fs.existsSync(userCookiesPath)) {
+      if (useCookies && hasCookiesFile) {
         args.unshift('--cookies', userCookiesPath);
       }
       args.push(videoUrl);
       return args;
     };
 
-    const tryFormat = (index, lastError = null) => {
-      if (index >= targetFormats.length) {
-        return reject(lastError || new Error('yt-dlp failed to download the video.'));
+    const tryAttempt = (index, lastError = null) => {
+      if (index >= attempts.length) {
+        return reject(lastError || new Error('yt-dlp failed to download the video after trying all format, client, and cookie fallbacks.'));
       }
 
-      const args = buildArgs(targetFormats[index]);
+      const { format, clientConfig, useCookies } = attempts[index];
+      const args = buildArgs(format, clientConfig, useCookies);
+      
+      console.log(`[Download] Attempt ${index + 1}/${attempts.length}: format=${format}, client=${clientConfig.name}, cookies=${useCookies}`);
+      
       const ytProcess = spawn(YTDLP_COMMAND, args);
       let stderr = '';
       let stdout = '';
@@ -139,12 +168,28 @@ function downloadVideo(videoUrl, outputPath, userId) {
       ytProcess.on('close', async (code) => {
         const errorMsg = stderr.trim() || stdout.trim();
         if (code !== 0) {
-          const nextIndex = index + 1;
-          if (nextIndex < targetFormats.length) {
-            console.warn(`yt-dlp format ${targetFormats[index]} failed: ${errorMsg}. Trying fallback format ${targetFormats[nextIndex]}.`);
-            return tryFormat(nextIndex, new Error(`yt-dlp exited with code ${code}: ${errorMsg}`));
+          const isBotBlock = 
+            errorMsg.includes('Sign in to confirm you\'re not a bot') ||
+            errorMsg.includes('confirm you are not a bot') ||
+            errorMsg.includes('403 Forbidden') ||
+            errorMsg.includes('429 Too Many Requests');
+
+          let nextIndex = index + 1;
+          if (isBotBlock) {
+            // Skip other formats under the current group (useCookies + clientConfig)
+            while (
+              nextIndex < attempts.length &&
+              attempts[nextIndex].useCookies === useCookies &&
+              attempts[nextIndex].clientConfig.name === clientConfig.name
+            ) {
+              nextIndex++;
+            }
+            console.warn(`yt-dlp attempt ${index} blocked (bot detection). Skipping remaining formats in group ${clientConfig.name} (cookies=${useCookies}). Trying next group at index ${nextIndex}...`);
+          } else {
+            console.warn(`yt-dlp attempt ${index} failed: format=${format}, client=${clientConfig.name}, cookies=${useCookies}. Error: ${errorMsg}. Trying next attempt...`);
           }
-          return reject(new Error(`yt-dlp exited with code ${code}: ${errorMsg}`));
+
+          return tryAttempt(nextIndex, new Error(`yt-dlp exited with code ${code}: ${errorMsg}`));
         }
 
         try {
@@ -157,7 +202,7 @@ function downloadVideo(videoUrl, outputPath, userId) {
       });
     };
 
-    tryFormat(0);
+    tryAttempt(0);
   });
 }
 

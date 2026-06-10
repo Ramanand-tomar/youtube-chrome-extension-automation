@@ -49,9 +49,22 @@ async function downloadInstagramReel(reelUrl, outputPath, userId, maxRetries = 3
  */
 async function _executeDownload(reelUrl, outputPath, userId) {
   return new Promise((resolve, reject) => {
-    const targetFormats = ['bestvideo[height<=1080]+bestaudio/best', 'best[height<=1080]/best', 'best', null];
+    const attempts = [];
+    const userCookiesPath = getInstagramCookiesPath(userId);
+    const hasCookiesFile = userId && fs.pathExistsSync(userCookiesPath);
 
-    const buildArgs = (formatString) => {
+    const formats = ['bestvideo[height<=1080]+bestaudio/best', 'best[height<=1080]/best', 'best'];
+
+    if (hasCookiesFile) {
+      for (const fmt of formats) {
+        attempts.push({ format: fmt, useCookies: true });
+      }
+    }
+    for (const fmt of formats) {
+      attempts.push({ format: fmt, useCookies: false });
+    }
+
+    const buildArgs = (formatString, useCookies) => {
       const args = [
         '--no-playlist',
         '--no-warnings',
@@ -64,19 +77,22 @@ async function _executeDownload(reelUrl, outputPath, userId) {
       if (formatString) {
         args.unshift('-f', formatString);
       }
-      const userCookiesPath = getInstagramCookiesPath(userId);
-      if (userId && fs.pathExistsSync(userCookiesPath)) {
+      if (useCookies && hasCookiesFile) {
         args.unshift(`--cookies=${userCookiesPath}`);
       }
       return args;
     };
 
-    const tryFormat = (index, lastError = null) => {
-      if (index >= targetFormats.length) {
-        return reject(lastError || new Error('yt-dlp failed to download the Instagram reel.'));
+    const tryAttempt = (index, lastError = null) => {
+      if (index >= attempts.length) {
+        return reject(lastError || new Error('yt-dlp failed to download the Instagram reel after trying all formats and cookie fallbacks.'));
       }
 
-      const args = buildArgs(targetFormats[index]);
+      const { format, useCookies } = attempts[index];
+      const args = buildArgs(format, useCookies);
+      
+      console.log(`[Instagram Download] Attempt ${index + 1}/${attempts.length}: format=${format}, cookies=${useCookies}`);
+      
       const ytProcess = spawn(YTDLP_COMMAND, args);
       let stderr = '';
       let stdout = '';
@@ -100,12 +116,12 @@ async function _executeDownload(reelUrl, outputPath, userId) {
         const errorMsg = stderr.trim() || stdout.trim();
         if (code !== 0) {
           const nextIndex = index + 1;
-          if (nextIndex < targetFormats.length) {
-            console.warn(`yt-dlp format ${targetFormats[index]} failed: ${errorMsg}. Trying fallback ${targetFormats[nextIndex]}.`);
-            return tryFormat(nextIndex, new Error(`yt-dlp exited with code ${code}: ${errorMsg}`));
-          }
-
+          
           if (errorMsg.includes('Login required') || errorMsg.includes('Private account')) {
+            if (useCookies && nextIndex < attempts.length) {
+              console.warn(`Instagram cookie attempt failed with login/private warning. Trying anonymous fallback...`);
+              return tryAttempt(nextIndex, new Error(`yt-dlp exited with code ${code}: ${errorMsg}`));
+            }
             return reject(new Error('Login required: Please upload cookies.txt to proceed.'));
           }
           if (errorMsg.includes('HTTP Error 429')) {
@@ -113,6 +129,11 @@ async function _executeDownload(reelUrl, outputPath, userId) {
           }
           if (errorMsg.includes('not found') || errorMsg.includes('does not exist')) {
             return reject(new Error('Reel not found or deleted.'));
+          }
+
+          if (nextIndex < attempts.length) {
+            console.warn(`yt-dlp Instagram attempt ${index} failed: format=${format}, cookies=${useCookies}. Error: ${errorMsg}. Trying next fallback...`);
+            return tryAttempt(nextIndex, new Error(`yt-dlp exited with code ${code}: ${errorMsg}`));
           }
           return reject(new Error(`yt-dlp exited with code ${code}: ${errorMsg}`));
         }
@@ -129,7 +150,7 @@ async function _executeDownload(reelUrl, outputPath, userId) {
       });
     };
 
-    tryFormat(0);
+    tryAttempt(0);
   });
 }
 
