@@ -158,12 +158,27 @@ async function downloadVideo(videoUrl, outputPath) {
 
   if (lastError) {
     const message = lastError.message || '';
-    if (message.includes('Sign in to confirm') || message.includes('not a bot')) {
-      throw new Error(
-        'YouTube is blocking the download (bot check). Please upload YouTube cookies via the Account tab → "Upload YouTube Cookies" to fix this.'
-      );
+    const lower = message.toLowerCase();
+    const isBotCheck = lower.includes('sign in to confirm') || lower.includes('not a bot') || lower.includes('bot check') || lower.includes('blocking the download');
+
+    // Truncate long stderr for safer output
+    const truncated = message.length > 1200 ? message.slice(0, 1200) + '\n...[truncated]' : message;
+    console.error('[yt-dlp] Last error (truncated):', truncated);
+
+    if (isBotCheck) {
+      // Provide actionable guidance when bot checks are detected even if a cookies file exists
+      const guidance = [
+        'YouTube is blocking the download (bot check).',
+        'Although a cookies file was provided, the cookies may be expired or missing required auth cookies (e.g. SAPISID/SID/HSID).',
+        'Action: Re-export your YouTube cookies in Netscape (cookies.txt) format from a logged-in Chrome profile and re-upload via the Account tab → "Upload YouTube Cookies".',
+        "Make sure the exported file contains entries for 'youtube.com' and includes authentication cookies (SAPISID, HSID, SID).",
+        'If the issue persists, try logging into a different Google account in your browser and uploading those cookies, or remove and re-add the cookies file.',
+      ].join(' ');
+
+      throw new Error(`${guidance} (yt-dlp error: ${truncated})`);
     }
-    throw new Error(`All download strategies failed. Last error: ${message}`);
+
+    throw new Error(`All download strategies failed. Last error: ${truncated}`);
   }
 
   const exists = await fs.pathExists(outputPath);
