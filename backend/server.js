@@ -75,28 +75,49 @@ function extractTitleFromUrl(videoUrl) {
 
 function downloadVideo(videoUrl, outputPath) {
   return new Promise((resolve, reject) => {
-    const args = ['--no-playlist', '--no-warnings', '--js-runtimes', 'node', '-f', 'bestvideo[height<=1080]+bestaudio/best', '--recode-video', 'mp4', '-o', outputPath];
-    if (fs.existsSync(YOUTUBE_COOKIES_PATH)) {
-      args.unshift('--cookies', YOUTUBE_COOKIES_PATH);
-    }
-    args.push(videoUrl);
-
-    const ytProcess = spawn(YTDLP_COMMAND, args);
-    let stderr = '';
-
-    ytProcess.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
-    ytProcess.on('error', (error) => {
-      if (error.code === 'ENOENT') {
-        return reject(new Error(`yt-dlp executable not found. Install yt-dlp or set YTDLP_COMMAND to a valid command.`));
+    const buildArgs = (formatString) => {
+      const args = ['--no-playlist', '--no-warnings', '--js-runtimes', 'node', '-f', formatString, '--merge-output-format', 'mp4', '--recode-video', 'mp4', '-o', outputPath];
+      if (fs.existsSync(YOUTUBE_COOKIES_PATH)) {
+        args.unshift('--cookies', YOUTUBE_COOKIES_PATH);
       }
-      reject(error);
-    });
-    ytProcess.on('close', async (code) => {
-      if (code !== 0) return reject(new Error(`yt-dlp exited with code ${code}: ${stderr.trim()}`));
-      const exists = await fs.pathExists(outputPath);
-      if (!exists) return reject(new Error('Downloaded video file not found.'));
-      resolve(outputPath);
-    });
+      args.push(videoUrl);
+      return args;
+    };
+
+    const primaryArgs = buildArgs('bestvideo[ext=mp4][height<=1080]+bestaudio/best[ext=mp4]/best[ext=mp4]/best');
+    const fallbackArgs = buildArgs('best[ext=mp4]/best');
+
+    const runProcess = (argsToUse, isFallback = false) => {
+      const ytProcess = spawn(YTDLP_COMMAND, argsToUse);
+      let stderr = '';
+
+      ytProcess.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
+      ytProcess.on('error', (error) => {
+        if (error.code === 'ENOENT') {
+          return reject(new Error(`yt-dlp executable not found. Install yt-dlp or set YTDLP_COMMAND to a valid command.`));
+        }
+        reject(error);
+      });
+      ytProcess.on('close', async (code) => {
+        const errorMsg = stderr.trim();
+        if (code !== 0) {
+          if (!isFallback && errorMsg.includes('Requested format is not available')) {
+            return runProcess(fallbackArgs, true);
+          }
+          return reject(new Error(`yt-dlp exited with code ${code}: ${errorMsg}`));
+        }
+
+        try {
+          const exists = await fs.pathExists(outputPath);
+          if (!exists) return reject(new Error('Downloaded video file not found.'));
+          resolve(outputPath);
+        } catch (error) {
+          reject(error);
+        }
+      });
+    };
+
+    runProcess(primaryArgs);
   });
 }
 

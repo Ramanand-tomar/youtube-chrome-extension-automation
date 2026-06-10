@@ -46,14 +46,68 @@ async function downloadInstagramReel(reelUrl, outputPath, maxRetries = 3) {
  */
 async function _executeDownload(reelUrl, outputPath) {
   return new Promise((resolve, reject) => {
-    const args = ['--no-playlist', '--no-warnings', '--js-runtimes', 'node', '-f', 'bestvideo[height<=1080]+bestaudio/best', '--recode-video', 'mp4', '-o', outputPath, reelUrl];
+    const buildArgs = (formatString) => {
+      const args = ['--no-playlist', '--no-warnings', '--js-runtimes', 'node', '-f', formatString, '--merge-output-format', 'mp4', '--recode-video', 'mp4', '-o', outputPath, reelUrl];
+      if (fs.pathExistsSync(INSTAGRAM_COOKIES_PATH)) {
+        args.unshift(`--cookies=${INSTAGRAM_COOKIES_PATH}`);
+      }
+      return args;
+    };
 
-    // Add cookies if available
-    if (fs.pathExistsSync(INSTAGRAM_COOKIES_PATH)) {
-      args.splice(0, 0, `--cookies=${INSTAGRAM_COOKIES_PATH}`);
-    }
+    const primaryArgs = buildArgs('bestvideo[ext=mp4][height<=1080]+bestaudio/best[ext=mp4]/best[ext=mp4]/best');
+    const fallbackArgs = buildArgs('best[ext=mp4]/best');
 
-    const ytProcess = spawn(YTDLP_COMMAND, args);
+    const runProcess = (argsToUse, isFallback = false) => {
+      const ytProcess = spawn(YTDLP_COMMAND, argsToUse);
+      let stderr = '';
+      let stdout = '';
+
+      ytProcess.stdout.on('data', (chunk) => {
+        stdout += chunk.toString();
+      });
+
+      ytProcess.stderr.on('data', (chunk) => {
+        stderr += chunk.toString();
+      });
+
+      ytProcess.on('error', (error) => {
+        if (error.code === 'ENOENT') {
+          return reject(new Error(`yt-dlp executable not found. Install yt-dlp or set YTDLP_COMMAND to a valid command.`));
+        }
+        reject(error);
+      });
+
+      ytProcess.on('close', async (code) => {
+        const errorMsg = stderr.trim() || stdout.trim();
+        if (code !== 0) {
+          if (!isFallback && errorMsg.includes('Requested format is not available')) {
+            return runProcess(fallbackArgs, true);
+          }
+          if (errorMsg.includes('Login required') || errorMsg.includes('Private account')) {
+            return reject(new Error('Login required: Please upload cookies.txt to proceed.'));
+          }
+          if (errorMsg.includes('HTTP Error 429')) {
+            return reject(new Error('Rate limited: Instagram blocked the request. Please wait 15 minutes and retry.'));
+          }
+          if (errorMsg.includes('not found') || errorMsg.includes('does not exist')) {
+            return reject(new Error('Reel not found or deleted.'));
+          }
+          return reject(new Error(`yt-dlp exited with code ${code}: ${errorMsg}`));
+        }
+
+        try {
+          const exists = await fs.pathExists(outputPath);
+          if (!exists) {
+            return reject(new Error('Downloaded reel file not found.'));
+          }
+          resolve(outputPath);
+        } catch (error) {
+          reject(error);
+        }
+      });
+    };
+
+    runProcess(primaryArgs);
     let stderr = '';
     let stdout = '';
 
