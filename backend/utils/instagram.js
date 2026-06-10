@@ -1,8 +1,6 @@
 const { spawn } = require('child_process');
 const fs = require('fs-extra');
 const path = require('path');
-const axios = require('axios');
-const { downloadFile } = require('./downloader');
 
 const YTDLP_COMMAND = process.env.YTDLP_COMMAND || 'yt-dlp';
 const COOKIES_DIR = path.resolve(__dirname, '../cookies');
@@ -50,96 +48,185 @@ async function downloadInstagramReel(reelUrl, outputPath, userId, userAgent = nu
  * Execute yt-dlp download for Instagram reel
  */
 async function _executeDownload(reelUrl, outputPath, userId, userAgent = null) {
-  const options = {
-    method: 'GET',
-    url: 'https://instagram-reels-downloader-api.p.rapidapi.com/download',
-    params: { url: reelUrl },
-    headers: {
-      'x-rapidapi-key': process.env.RAPIDAPI_KEY || '7bb80227bemsh50cc3a7ae12938fp16806ajsn1978e3268063',
-      'x-rapidapi-host': 'instagram-reels-downloader-api.p.rapidapi.com',
-      'Content-Type': 'application/json'
-    }
-  };
+  return new Promise((resolve, reject) => {
+    const attempts = [];
+    const userCookiesPath = getInstagramCookiesPath(userId);
+    const hasCookiesFile = userId && fs.pathExistsSync(userCookiesPath);
 
-  try {
-    console.log(`[Instagram Download] Calling RapidAPI for reel: ${reelUrl}`);
-    const response = await axios.request(options);
-    const data = response.data;
+    const formats = ['bestvideo[height<=1080]+bestaudio/best', 'best[height<=1080]/best', 'best'];
 
-    if (!data || !data.success || !data.data) {
-      throw new Error(`RapidAPI failed: ${data?.message || 'Unknown error'}`);
-    }
-
-    const igData = data.data;
-    let videoUrl = null;
-
-    if (igData.medias && igData.medias.length > 0) {
-      const videoMedia = igData.medias.find(m => m.type === 'video');
-      if (videoMedia) {
-        videoUrl = videoMedia.url;
+    if (hasCookiesFile) {
+      for (const fmt of formats) {
+        attempts.push({ format: fmt, useCookies: true });
       }
-    } else if (igData.url) {
-      // Fallback if url contains the direct mp4 link
-      videoUrl = igData.url;
+    }
+    for (const fmt of formats) {
+      attempts.push({ format: fmt, useCookies: false });
     }
 
-    if (!videoUrl) {
-      throw new Error('No video URL found in RapidAPI response');
-    }
+    const buildArgs = (formatString, useCookies) => {
+      const activeUserAgent = userAgent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+      const args = [
+        '-4', // Force IPv4
+        '--no-playlist',
+        '--no-warnings',
+        '--js-runtimes', 'node',
+        '--merge-output-format', 'mp4',
+        '--recode-video', 'mp4',
+        '--user-agent', activeUserAgent,
+        '-o', outputPath, reelUrl
+      ];
+      if (formatString) {
+        args.unshift('-f', formatString);
+      }
+      if (useCookies && hasCookiesFile) {
+        args.unshift(`--cookies=${userCookiesPath}`);
+      }
+      return args;
+    };
 
-    console.log(`[Instagram Download] Format found. Downloading MP4 to ${outputPath}...`);
-    await downloadFile(videoUrl, outputPath);
-    return outputPath;
-  } catch (error) {
-    console.error('[Instagram Download Error]', error.message);
-    throw new Error(`Instagram download failed: ${error.message}`);
-  }
+    const tryAttempt = (index, lastError = null) => {
+      if (index >= attempts.length) {
+        return reject(lastError || new Error('yt-dlp failed to download the Instagram reel after trying all formats and cookie fallbacks.'));
+      }
+
+      const { format, useCookies } = attempts[index];
+      const args = buildArgs(format, useCookies);
+      
+      console.log(`[Instagram Download] Attempt ${index + 1}/${attempts.length}: format=${format}, cookies=${useCookies}`);
+      
+      const ytProcess = spawn(YTDLP_COMMAND, args);
+      let stderr = '';
+      let stdout = '';
+
+      ytProcess.stdout.on('data', (chunk) => {
+        stdout += chunk.toString();
+      });
+
+      ytProcess.stderr.on('data', (chunk) => {
+        stderr += chunk.toString();
+      });
+
+      ytProcess.on('error', (error) => {
+        if (error.code === 'ENOENT') {
+          return reject(new Error('yt-dlp executable not found. Install yt-dlp or set YTDLP_COMMAND to a valid command.'));
+        }
+        reject(error);
+      });
+
+      ytProcess.on('close', async (code) => {
+        const errorMsg = stderr.trim() || stdout.trim();
+        if (code !== 0) {
+          const nextIndex = index + 1;
+          
+          if (errorMsg.includes('Login required') || errorMsg.includes('Private account')) {
+            if (useCookies && nextIndex < attempts.length) {
+              console.warn(`Instagram cookie attempt failed with login/private warning. Trying anonymous fallback...`);
+              return tryAttempt(nextIndex, new Error(`yt-dlp exited with code ${code}: ${errorMsg}`));
+            }
+            return reject(new Error('Login required: Please upload cookies.txt to proceed.'));
+          }
+          if (errorMsg.includes('HTTP Error 429')) {
+            return reject(new Error('Rate limited: Instagram blocked the request. Please wait 15 minutes and retry.'));
+          }
+          if (errorMsg.includes('not found') || errorMsg.includes('does not exist')) {
+            return reject(new Error('Reel not found or deleted.'));
+          }
+
+          if (nextIndex < attempts.length) {
+            console.warn(`yt-dlp Instagram attempt ${index} failed: format=${format}, cookies=${useCookies}. Error: ${errorMsg}. Trying next fallback...`);
+            return tryAttempt(nextIndex, new Error(`yt-dlp exited with code ${code}: ${errorMsg}`));
+          }
+          return reject(new Error(`yt-dlp exited with code ${code}: ${errorMsg}`));
+        }
+
+        try {
+          const exists = await fs.pathExists(outputPath);
+          if (!exists) {
+            return reject(new Error('Downloaded reel file not found.'));
+          }
+          resolve(outputPath);
+        } catch (error) {
+          reject(error);
+        }
+      });
+    };
+
+    tryAttempt(0);
+  });
 }
 
 /**
  * Extract metadata from Instagram reel using yt-dlp --dump-json
  */
 async function extractInstagramMetadata(reelUrl, userId, userAgent = null) {
-  const options = {
-    method: 'GET',
-    url: 'https://instagram-reels-downloader-api.p.rapidapi.com/download',
-    params: { url: reelUrl },
-    headers: {
-      'x-rapidapi-key': process.env.RAPIDAPI_KEY || '7bb80227bemsh50cc3a7ae12938fp16806ajsn1978e3268063',
-      'x-rapidapi-host': 'instagram-reels-downloader-api.p.rapidapi.com',
-      'Content-Type': 'application/json'
-    }
-  };
+  return new Promise((resolve, reject) => {
+    const activeUserAgent = userAgent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+    const args = [
+      '-4', // Force IPv4
+      '--dump-json',
+      '--no-warnings',
+      '--js-runtimes', 'node',
+      '--user-agent', activeUserAgent,
+      reelUrl
+    ];
 
-  try {
-    const response = await axios.request(options);
-    const data = response.data;
-    
-    if (!data || !data.success || !data.data) {
-      throw new Error(`RapidAPI failed: ${data?.message || 'Unknown error'}`);
+    // Add cookies if available
+    const userCookiesPath = getInstagramCookiesPath(userId);
+    if (userId && fs.pathExistsSync(userCookiesPath)) {
+      args.splice(0, 0, `--cookies=${userCookiesPath}`);
     }
 
-    const igData = data.data;
+    const ytProcess = spawn(YTDLP_COMMAND, args);
+    let stdout = '';
+    let stderr = '';
 
-    const metadata = {
-      uploader: igData.author || (igData.owner && igData.owner.username) || 'Unknown',
-      caption: igData.title || '',
-      uploadDate: '',
-      duration: igData.duration || 0,
-      title: igData.title || '',
-      url: reelUrl,
-    };
+    ytProcess.stdout.on('data', (chunk) => {
+      stdout += chunk.toString();
+    });
 
-    if (metadata.duration > 180) {
-      throw new Error(
-        `Video duration (${metadata.duration}s) exceeds 180 seconds (3 minutes) limit for YouTube Shorts. Please trim the video manually.`
-      );
-    }
+    ytProcess.stderr.on('data', (chunk) => {
+      stderr += chunk.toString();
+    });
 
-    return metadata;
-  } catch (error) {
-    throw new Error(`Failed to extract Instagram metadata: ${error.message}`);
-  }
+    ytProcess.on('error', (error) => {
+      if (error.code === 'ENOENT') {
+        return reject(new Error('yt-dlp executable not found. Install yt-dlp or set YTDLP_COMMAND to a valid command.'));
+      }
+      reject(error);
+    });
+
+    ytProcess.on('close', (code) => {
+      if (code !== 0) {
+        return reject(new Error(`Failed to extract metadata: ${stderr.trim()}`));
+      }
+
+      try {
+        const data = JSON.parse(stdout);
+        const metadata = {
+          uploader: data.uploader || data.uploader_id || 'Unknown',
+          caption: data.description || '',
+          uploadDate: data.upload_date || '',
+          duration: data.duration || 0,
+          title: data.title || '',
+          url: data.webpage_url || reelUrl,
+        };
+
+        // Validate duration (must be ≤ 180 seconds for YouTube Shorts)
+        if (metadata.duration > 180) {
+          return reject(
+            new Error(
+              `Video duration (${metadata.duration}s) exceeds 180 seconds (3 minutes) limit for YouTube Shorts. Please trim the video manually.`
+            )
+          );
+        }
+
+        resolve(metadata);
+      } catch (error) {
+        reject(new Error(`Failed to parse yt-dlp metadata: ${error.message}`));
+      }
+    });
+  });
 }
 
 /**
