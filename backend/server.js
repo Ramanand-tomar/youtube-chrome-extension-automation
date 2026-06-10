@@ -11,6 +11,8 @@ const { google } = require('googleapis');
 const cron = require('node-cron');
 const multer = require('multer');
 
+const YTDLP_COMMAND = process.env.YTDLP_COMMAND || 'yt-dlp';
+
 const instagram = require('./utils/instagram');
 const quota = require('./utils/quota');
 const scheduler = require('./utils/scheduler');
@@ -22,6 +24,7 @@ const DOWNLOADS_DIR = path.resolve(__dirname, 'downloads');
 const YOUTUBE_COOKIES_PATH = path.resolve(__dirname, 'cookies', 'youtube_cookies.txt');
 
 fs.ensureDirSync(DOWNLOADS_DIR);
+fs.ensureDirSync(path.dirname(YOUTUBE_COOKIES_PATH));
 
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -72,17 +75,22 @@ function extractTitleFromUrl(videoUrl) {
 
 function downloadVideo(videoUrl, outputPath) {
   return new Promise((resolve, reject) => {
-    const args = ['--no-playlist', '--no-warnings', '--js-runtimes', 'node', '-f', 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best', '--merge-output-format', 'mp4', '-o', outputPath];
+    const args = ['--no-playlist', '--no-warnings', '--js-runtimes', 'node', '-f', 'bestvideo[height<=1080]+bestaudio/best', '--recode-video', 'mp4', '-o', outputPath];
     if (fs.existsSync(YOUTUBE_COOKIES_PATH)) {
       args.unshift('--cookies', YOUTUBE_COOKIES_PATH);
     }
     args.push(videoUrl);
 
-    const ytProcess = spawn('yt-dlp', args);
+    const ytProcess = spawn(YTDLP_COMMAND, args);
     let stderr = '';
 
     ytProcess.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
-    ytProcess.on('error', reject);
+    ytProcess.on('error', (error) => {
+      if (error.code === 'ENOENT') {
+        return reject(new Error(`yt-dlp executable not found. Install yt-dlp or set YTDLP_COMMAND to a valid command.`));
+      }
+      reject(error);
+    });
     ytProcess.on('close', async (code) => {
       if (code !== 0) return reject(new Error(`yt-dlp exited with code ${code}: ${stderr.trim()}`));
       const exists = await fs.pathExists(outputPath);
@@ -721,6 +729,7 @@ cleanupOrphanCloudinaryVideos().catch((err) => {
 });
 
 // ─── Start ────────────────────────────────────────────────────────────────────
+console.log('[backend] Using yt-dlp command:', YTDLP_COMMAND);
 db.initDb()
   .then(() => {
     app.listen(PORT, () => console.log(`Backend listening on port ${PORT}`));

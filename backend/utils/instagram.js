@@ -2,6 +2,7 @@ const { spawn } = require('child_process');
 const fs = require('fs-extra');
 const path = require('path');
 
+const YTDLP_COMMAND = process.env.YTDLP_COMMAND || 'yt-dlp';
 const COOKIES_DIR = path.resolve(__dirname, '../cookies');
 const INSTAGRAM_COOKIES_PATH = path.join(COOKIES_DIR, 'instagram.txt');
 
@@ -45,14 +46,14 @@ async function downloadInstagramReel(reelUrl, outputPath, maxRetries = 3) {
  */
 async function _executeDownload(reelUrl, outputPath) {
   return new Promise((resolve, reject) => {
-    const args = ['--no-playlist', '-f', 'best[ext=mp4]/best', '-o', outputPath, reelUrl];
+    const args = ['--no-playlist', '--no-warnings', '--js-runtimes', 'node', '-f', 'bestvideo[height<=1080]+bestaudio/best', '--recode-video', 'mp4', '-o', outputPath, reelUrl];
 
     // Add cookies if available
     if (fs.pathExistsSync(INSTAGRAM_COOKIES_PATH)) {
       args.splice(0, 0, `--cookies=${INSTAGRAM_COOKIES_PATH}`);
     }
 
-    const ytProcess = spawn('yt-dlp', args);
+    const ytProcess = spawn(YTDLP_COMMAND, args);
     let stderr = '';
     let stdout = '';
 
@@ -65,6 +66,9 @@ async function _executeDownload(reelUrl, outputPath) {
     });
 
     ytProcess.on('error', (error) => {
+      if (error.code === 'ENOENT') {
+        return reject(new Error(`yt-dlp executable not found. Install yt-dlp or set YTDLP_COMMAND to a valid command.`));
+      }
       reject(error);
     });
 
@@ -105,14 +109,14 @@ async function _executeDownload(reelUrl, outputPath) {
  */
 async function extractInstagramMetadata(reelUrl) {
   return new Promise((resolve, reject) => {
-    const args = ['--dump-json', '--no-warnings', reelUrl];
+    const args = ['--dump-json', '--no-warnings', '--js-runtimes', 'node', reelUrl];
 
     // Add cookies if available
     if (fs.pathExistsSync(INSTAGRAM_COOKIES_PATH)) {
       args.splice(0, 0, `--cookies=${INSTAGRAM_COOKIES_PATH}`);
     }
 
-    const ytProcess = spawn('yt-dlp', args);
+    const ytProcess = spawn(YTDLP_COMMAND, args);
     let stdout = '';
     let stderr = '';
 
@@ -125,6 +129,9 @@ async function extractInstagramMetadata(reelUrl) {
     });
 
     ytProcess.on('error', (error) => {
+      if (error.code === 'ENOENT') {
+        return reject(new Error(`yt-dlp executable not found. Install yt-dlp or set YTDLP_COMMAND to a valid command.`));
+      }
       reject(error);
     });
 
