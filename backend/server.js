@@ -73,27 +73,30 @@ function extractTitleFromUrl(videoUrl) {
 }
 
 function buildYtdlpArgs(videoUrl, outputPath, strategy = 'best', useCookies = true) {
-  // strategy: 'best' (full), 'video-only' (best MP4), 'simple' (pre-merged best), 'android' (Android client)
+  // strategy: 'best' (full), 'video-only' (best MP4), 'simple' (quick), 'android' (Android client), 'any' (any available)
   const baseArgs = [
     '--no-playlist',
     '--retries', '5',
     '--fragment-retries', '5',
-    '--user-agent', 'Mozilla/5.0 (Linux; Android 11; Pixel 5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36',
+    '--user-agent', 'Mozilla/5.0 (Linux; Android 13; Pixel 8 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36',
     '--socket-timeout', '30',
     '--sleep-interval', '2',
     '--max-sleep-interval', '8',
+    '--no-check-certificate',
+    '--geo-bypass',
+    '--add-header', 'Accept-Language: en-US,en;q=0.9',
     '-o', outputPath,
   ];
 
   if (strategy === 'best') {
     baseArgs.push('-f', 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best', '--merge-output-format', 'mp4');
   } else if (strategy === 'video-only') {
-    baseArgs.push('-f', 'best[ext=mp4]');
+    baseArgs.push('-f', 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best', '--merge-output-format', 'mp4');
   } else if (strategy === 'simple') {
-    baseArgs.push('-f', 'b');
+    baseArgs.push('-f', 'best[ext=mp4]/best');
   } else if (strategy === 'android') {
-    baseArgs.push('-f', 'best');
-    baseArgs.push('--extractor-args', 'youtube:player_client=android:skip=hls/dash');
+    baseArgs.push('-f', 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best', '--merge-output-format', 'mp4');
+    baseArgs.push('--extractor-args', 'youtube:player_client=android:player_mode=tv');
   }
 
   if (useCookies && fs.pathExistsSync(YOUTUBE_COOKIES_PATH)) {
@@ -128,8 +131,8 @@ async function downloadVideo(videoUrl, outputPath) {
   const strategies = [
     { name: 'best', useCookies: true },
     { name: 'video-only', useCookies: true },
+    { name: 'android', useCookies: true },
     { name: 'simple', useCookies: true },
-    { name: 'android', useCookies: false },
     { name: 'any', useCookies: true },
   ];
   let lastError = null;

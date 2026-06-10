@@ -26,7 +26,7 @@ export default function UploadScreen() {
   const colors = Colors[scheme === 'dark' ? 'dark' : 'light'];
 
   const { userId, isConnected } = useAuth();
-  const { progress, logs, status, videoUrl, isUploading, startYouTubeUpload, startInstagramUpload, startSchedule, resetUpload } = useUpload();
+  const { progress, logs, status, videoUrl, errorMessage, isUploading, startYouTubeUpload, startInstagramUpload, startSchedule, resetUpload } = useUpload();
 
   const [youtubeUrl, setYoutubeUrl] = useState('');
   const [instagramUrl, setInstagramUrl] = useState('');
@@ -141,6 +141,7 @@ export default function UploadScreen() {
             logs={logs}
             status={status}
             videoUrl={videoUrl}
+            errorMessage={errorMessage}
             onReset={handleReset}
           />
         )}

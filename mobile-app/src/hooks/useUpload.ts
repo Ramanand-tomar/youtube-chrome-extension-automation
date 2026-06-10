@@ -32,6 +32,7 @@ export function useUpload() {
   const [logs, setLogs] = useState<UploadLog[]>([]);
   const [status, setStatus] = useState<UploadStatus>('idle');
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const xhrRef = useRef<XMLHttpRequest | null>(null);
   const logIdRef = useRef(0);
 
@@ -48,35 +49,49 @@ export function useUpload() {
     setLogs([]);
     setStatus('idle');
     setVideoUrl(null);
+    setErrorMessage(null);
     logIdRef.current = 0;
   }, []);
 
   const handleXhr = useCallback((xhr: XMLHttpRequest) => {
     xhrRef.current = xhr;
     let processedLength = 0;
-    setStatus('uploading');
-    setProgress(5);
+    let currentStatus: UploadStatus = 'uploading';
 
-    xhr.onprogress = () => {
-      const chunk = xhr.responseText.slice(processedLength);
-      processedLength = xhr.responseText.length;
-
+    const processChunk = (chunk: string) => {
       const lines = chunk.split('\n').filter((l) => l.trim().length > 0);
       for (const line of lines) {
         const event = parseNdjsonLine(line);
-        if (!event) continue;
+        if (!event) {
+          addLog(line, 'info');
+          continue;
+        }
 
         const msg: string = event.message || event.status || JSON.stringify(event);
         const stage: string = (event.stage || event.status || '').toLowerCase();
 
-        // Determine log type
         const logType: UploadLog['type'] =
           stage === 'error' || event.error ? 'error' :
           stage === 'complete' ? 'success' : 'info';
 
         addLog(msg, logType);
 
-        // Update progress
+        if (stage === 'error' || event.error) {
+          currentStatus = 'error';
+          setStatus('error');
+          setErrorMessage(typeof event.error === 'string' ? event.error : msg);
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+        }
+
+        if (stage === 'complete' || event.videoId || event.videoUrl) {
+          currentStatus = 'complete';
+          setStatus('complete');
+          setProgress(100);
+          setVideoUrl(event.videoUrl || event.shortUrl || null);
+          setErrorMessage(null);
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        }
+
         for (const [key, pct] of Object.entries(STAGE_PROGRESS)) {
           if (stage.includes(key) || msg.toLowerCase().includes(key)) {
             setProgress(pct);
@@ -84,39 +99,56 @@ export function useUpload() {
           }
         }
 
-        // Batch processing progress (proportional)
         if (stage === 'batch-processing' && event.current && event.total) {
           const batchPct = Math.round((event.current / event.total) * 60) + 10; // 10–70%
           setProgress(batchPct);
         }
-
-        // Handle completion
-        if (stage === 'complete' || event.videoId || event.videoUrl) {
-          setStatus('complete');
-          setProgress(100);
-          setVideoUrl(event.videoUrl || event.shortUrl || null);
-          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-        }
-
-        // Handle error
-        if (stage === 'error' || event.error) {
-          setStatus('error');
-          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-        }
       }
+    };
+
+    setStatus('uploading');
+    setProgress(5);
+    setErrorMessage(null);
+
+    xhr.onprogress = () => {
+      const chunk = xhr.responseText.slice(processedLength);
+      processedLength = xhr.responseText.length;
+      processChunk(chunk);
     };
 
     xhr.onerror = () => {
       addLog('Network error — could not reach server', 'error');
       setStatus('error');
+      setErrorMessage('Unable to reach backend. Check your network or try again.');
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
     };
 
+    xhr.onabort = () => {
+      addLog('Upload canceled.', 'info');
+      if (currentStatus === 'uploading') {
+        setStatus('idle');
+        setProgress(0);
+        setErrorMessage(null);
+      }
+    };
+
     xhr.onload = () => {
-      // Make sure we read remaining buffer
+      const chunk = xhr.responseText.slice(processedLength);
+      processChunk(chunk);
+      processedLength = xhr.responseText.length;
+
       if (xhr.status >= 400) {
-        addLog(`Server error: ${xhr.status}`, 'error');
+        addLog(`Server error: ${xhr.status} ${xhr.statusText || ''}`.trim(), 'error');
         setStatus('error');
+        setErrorMessage(`Server returned ${xhr.status}.`);
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+        return;
+      }
+
+      if (currentStatus === 'uploading') {
+        addLog('Upload ended without a completion event. Please try again or refresh the page.', 'error');
+        setStatus('error');
+        setErrorMessage('Upload ended without completion confirmation.');
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       }
     };
@@ -156,6 +188,7 @@ export function useUpload() {
     logs,
     status,
     videoUrl,
+    errorMessage,
     isUploading: status === 'uploading',
     startYouTubeUpload,
     startInstagramUpload,

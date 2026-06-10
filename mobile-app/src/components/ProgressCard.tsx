@@ -17,10 +17,11 @@ interface ProgressCardProps {
   logs: UploadLog[];
   status: UploadStatus;
   videoUrl: string | null;
+  errorMessage?: string | null;
   onReset: () => void;
 }
 
-export default function ProgressCard({ progress, logs, status, videoUrl, onReset }: ProgressCardProps) {
+export default function ProgressCard({ progress, logs, status, videoUrl, errorMessage, onReset }: ProgressCardProps) {
   const scheme = useColorScheme();
   const colors = Colors[scheme === 'dark' ? 'dark' : 'light'];
   const progressAnim = useRef(new Animated.Value(0)).current;
@@ -63,6 +64,11 @@ export default function ProgressCard({ progress, logs, status, videoUrl, onReset
     <View style={[styles.card, { backgroundColor: scheme === 'dark' ? 'rgba(30,41,59,0.6)' : '#f8fafc', borderColor: scheme === 'dark' ? 'rgba(100,116,139,0.25)' : '#e2e8f0' }]}>
       {/* Status label */}
       <Text style={[styles.statusText, { color: barColor }]}>{getStatusText()}</Text>
+      {status === 'error' && errorMessage ? (
+        <Text style={[styles.errorDetail, { color: '#f87171' }]} numberOfLines={2}>
+          {errorMessage}
+        </Text>
+      ) : null}
 
       {/* Progress bar */}
       <View style={[styles.progressTrack, { backgroundColor: scheme === 'dark' ? 'rgba(100,116,139,0.2)' : '#e2e8f0' }]}>
@@ -103,10 +109,13 @@ export default function ProgressCard({ progress, logs, status, videoUrl, onReset
             </Pressable>
           )}
           <Pressable
-            style={[styles.actionBtn, { backgroundColor: scheme === 'dark' ? 'rgba(100,116,139,0.3)' : '#e2e8f0' }]}
+            style={[
+              styles.actionBtn,
+              { backgroundColor: status === 'error' ? '#f87171' : scheme === 'dark' ? 'rgba(100,116,139,0.3)' : '#e2e8f0' },
+            ]}
             onPress={onReset}
           >
-            <Text style={[styles.actionBtnText, { color: colors.text }]}>+ New Upload</Text>
+            <Text style={[styles.actionBtnText, { color: status === 'error' ? '#fff' : colors.text }]}>{status === 'error' ? '↻ Refresh' : '+ New Upload'}</Text>
           </Pressable>
         </View>
       )}
@@ -153,6 +162,11 @@ const styles = StyleSheet.create({
   },
   logSuccess: {
     color: '#34d399',
+  },
+  errorDetail: {
+    fontSize: 12,
+    marginTop: 4,
+    lineHeight: 18,
   },
   actions: {
     gap: Spacing.two,
