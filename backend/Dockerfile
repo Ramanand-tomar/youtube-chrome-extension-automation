@@ -4,8 +4,8 @@ RUN apt-get update \
   && apt-get install -y python3 python3-pip ffmpeg curl \
   && rm -rf /var/lib/apt/lists/*
 
-# Install latest yt-dlp with Instagram support
-RUN pip3 install --break-system-packages --upgrade yt-dlp
+# Install latest yt-dlp with JS runtime support
+RUN pip3 install --break-system-packages --upgrade "yt-dlp[ejs]"
 
 WORKDIR /app
 
