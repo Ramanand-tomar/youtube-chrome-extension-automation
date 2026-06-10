@@ -72,38 +72,38 @@ function extractTitleFromUrl(videoUrl) {
   return 'YouTube Short';
 }
 
-function buildYtdlpArgs(videoUrl, outputPath, strategy = 'best') {
-  // strategy: 'best' (full), 'simple' (-f best), 'video-only' (best video without audio merge)
+function buildYtdlpArgs(videoUrl, outputPath, strategy = 'best', useCookies = true) {
+  // strategy: 'best' (full), 'video-only' (best MP4), 'simple' (pre-merged best), 'android' (Android client)
   const baseArgs = [
     '--no-playlist',
     '--retries', '5',
     '--fragment-retries', '5',
-    '--extractor-args', 'youtube:player_client=android,skip=hls/dash',
     '--user-agent', 'Mozilla/5.0 (Linux; Android 11; Pixel 5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36',
     '--socket-timeout', '30',
     '--sleep-interval', '2',
     '--max-sleep-interval', '8',
     '-o', outputPath,
-    videoUrl,
   ];
 
   if (strategy === 'best') {
-    baseArgs.splice(1, 0, '-f', 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best', '--merge-output-format', 'mp4');
+    baseArgs.push('-f', 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best', '--merge-output-format', 'mp4');
   } else if (strategy === 'video-only') {
-    baseArgs.splice(1, 0, '-f', 'best[ext=mp4]');
+    baseArgs.push('-f', 'best[ext=mp4]');
   } else if (strategy === 'simple') {
-    baseArgs.splice(1, 0, '-f', 'b');
-  } else if (strategy === 'any') {
-    // No format spec - let yt-dlp choose
+    baseArgs.push('-f', 'b');
+  } else if (strategy === 'android') {
+    baseArgs.push('-f', 'best');
+    baseArgs.push('--extractor-args', 'youtube:player_client=android:skip=hls/dash');
   }
 
-  if (fs.pathExistsSync(YOUTUBE_COOKIES_PATH)) {
+  if (useCookies && fs.pathExistsSync(YOUTUBE_COOKIES_PATH)) {
     baseArgs.unshift(`--cookies=${YOUTUBE_COOKIES_PATH}`);
     console.log('[yt-dlp] Using YouTube cookies file for download');
-  } else {
+  } else if (useCookies) {
     console.warn('[yt-dlp] No YouTube cookies file found. If downloads fail with bot-check errors, upload cookies via /api/youtube/cookies');
   }
 
+  baseArgs.push(videoUrl);
   return baseArgs;
 }
 
@@ -125,31 +125,42 @@ function runYtdlp(args) {
 }
 
 async function downloadVideo(videoUrl, outputPath) {
-  const strategies = ['best', 'video-only', 'simple', 'any'];
+  const strategies = [
+    { name: 'best', useCookies: true },
+    { name: 'video-only', useCookies: true },
+    { name: 'simple', useCookies: true },
+    { name: 'android', useCookies: false },
+    { name: 'any', useCookies: true },
+  ];
   let lastError = null;
 
-  for (const strategy of strategies) {
+  for (const { name: strategy, useCookies } of strategies) {
     try {
       console.log(`[yt-dlp] Attempting download with strategy: ${strategy}`);
-      const args = buildYtdlpArgs(videoUrl, outputPath, strategy);
+      const args = buildYtdlpArgs(videoUrl, outputPath, strategy, useCookies);
       await runYtdlp(args);
       console.log(`[yt-dlp] Download succeeded with strategy: ${strategy}`);
+      lastError = null;
       break;
     } catch (error) {
       lastError = error;
       const message = error.message || '';
       console.warn(`[yt-dlp] Strategy "${strategy}" failed. Trying next strategy...`);
 
-      if (message.includes('Sign in to confirm') || message.includes('not a bot')) {
-        throw new Error(
-          'YouTube is blocking the download (bot check). Please upload YouTube cookies via the Account tab → "Upload YouTube Cookies" to fix this.'
-        );
-      }
-
       if (strategy === 'any') {
-        throw new Error(`All download strategies failed. Last error: ${message}`);
+        break;
       }
     }
+  }
+
+  if (lastError) {
+    const message = lastError.message || '';
+    if (message.includes('Sign in to confirm') || message.includes('not a bot')) {
+      throw new Error(
+        'YouTube is blocking the download (bot check). Please upload YouTube cookies via the Account tab → "Upload YouTube Cookies" to fix this.'
+      );
+    }
+    throw new Error(`All download strategies failed. Last error: ${message}`);
   }
 
   const exists = await fs.pathExists(outputPath);
