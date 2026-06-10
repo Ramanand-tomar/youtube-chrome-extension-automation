@@ -12,19 +12,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
-  chrome.cookies.getAll({ domain: 'youtube.com' }, (cookies) => {
+  chrome.cookies.getAll({}, (cookies) => {
     if (chrome.runtime.lastError) {
       sendResponse({ error: chrome.runtime.lastError.message });
-    } else if (!cookies || cookies.length === 0) {
-      chrome.cookies.getAll({ url: 'https://www.youtube.com/' }, (fallbackCookies) => {
-        if (chrome.runtime.lastError) {
-          sendResponse({ error: chrome.runtime.lastError.message });
-        } else {
-          sendResponse({ cookies: fallbackCookies || [] });
-        }
-      });
     } else {
-      sendResponse({ cookies: cookies });
+      const filtered = (cookies || []).filter(c => c.domain.includes('youtube.com'));
+      sendResponse({ cookies: filtered });
     }
   });
 

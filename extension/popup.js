@@ -692,22 +692,12 @@ function getBrowserYouTubeCookies() {
         return reject(new Error('Cookies API unavailable in popup.'));
       }
 
-      chrome.cookies.getAll({ domain: 'youtube.com' }, (cookies) => {
+      chrome.cookies.getAll({}, (cookies) => {
         if (chrome.runtime.lastError) {
           return reject(new Error(chrome.runtime.lastError.message));
         }
-        if (!cookies || cookies.length === 0) {
-          // Fallback to a more specific URL search if the plain domain lookup returns nothing
-          chrome.cookies.getAll({ url: 'https://www.youtube.com/' }, (fallbackCookies) => {
-            if (chrome.runtime.lastError) {
-              reject(new Error(chrome.runtime.lastError.message));
-            } else {
-              resolve(fallbackCookies || []);
-            }
-          });
-        } else {
-          resolve(cookies);
-        }
+        const filtered = (cookies || []).filter(c => c.domain.includes('youtube.com'));
+        resolve(filtered);
       });
     };
 

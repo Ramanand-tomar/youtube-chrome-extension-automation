@@ -96,6 +96,16 @@ function downloadVideo(videoUrl, outputPath, userId, userAgent = null) {
     const userCookiesPath = getYoutubeCookiesPath(userId);
     const hasCookiesFile = userId && fs.existsSync(userCookiesPath);
 
+    if (hasCookiesFile) {
+      try {
+        const content = fs.readFileSync(userCookiesPath, 'utf8');
+        const hasSessionCookie = content.includes('LOGIN_INFO') || content.includes('__Secure-3PSID') || content.includes('__Secure-3PAPISID');
+        console.log(`[Cookies Check] Path=${userCookiesPath}, Size=${content.length} bytes, HasSessionAuth=${hasSessionCookie}`);
+      } catch (err) {
+        console.error(`[Cookies Check] Error reading cookies:`, err.message);
+      }
+    }
+
     const formats = ['bestvideo[height<=1080]+bestaudio/best', 'best[height<=1080]/best', 'best'];
     const clientConfigs = [
       { name: 'android,ios', args: ['--extractor-args', 'youtube:player-client=android,ios'] },
