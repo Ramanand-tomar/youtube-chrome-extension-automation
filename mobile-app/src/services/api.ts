@@ -20,6 +20,33 @@ export async function logout(userId: string): Promise<void> {
   if (!res.ok) throw new Error('Failed to log out');
 }
 
+// ─── YouTube Cookies ──────────────────────────────────────────────────────────
+
+export async function getYouTubeCookiesStatus(): Promise<{ hasCookies: boolean; message: string }> {
+  const res = await fetch(`${BACKEND_URL}/api/youtube/cookies/status`);
+  if (!res.ok) throw new Error('Failed to check YouTube cookies status');
+  return res.json();
+}
+
+export async function uploadYouTubeCookies(cookiesText: string): Promise<{ success: boolean; message: string }> {
+  const formData = new FormData();
+  // Create a Blob from the cookies text and attach as a file
+  const blob = new Blob([cookiesText], { type: 'text/plain' });
+  formData.append('cookies', blob, 'youtube.txt');
+  const res = await fetch(`${BACKEND_URL}/api/youtube/cookies`, {
+    method: 'POST',
+    body: formData,
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Failed to upload YouTube cookies');
+  return data;
+}
+
+export async function deleteYouTubeCookies(): Promise<void> {
+  const res = await fetch(`${BACKEND_URL}/api/youtube/cookies`, { method: 'DELETE' });
+  if (!res.ok) throw new Error('Failed to delete YouTube cookies');
+}
+
 // ─── Quota ────────────────────────────────────────────────────────────────────
 
 export async function getQuota(): Promise<{ used: number; limit: number; remaining: number }> {
@@ -40,6 +67,22 @@ export interface SchedulePayload {
   scheduledAt: string; // ISO string
 }
 
+export interface ScheduledJob {
+  id: string;
+  userId: string;
+  videoUrl: string;
+  title?: string;
+  description?: string;
+  privacy?: string;
+  platform: 'youtube' | 'instagram';
+  scheduledAt: string; // ISO string
+  status: 'pending' | 'processing' | 'done' | 'error';
+  videoId?: string;
+  videoUrlResult?: string;
+  error?: string;
+  createdAt?: string;
+}
+
 export async function scheduleUpload(payload: SchedulePayload): Promise<{ id: string }> {
   const res = await fetch(`${BACKEND_URL}/api/schedule`, {
     method: 'POST',
@@ -48,6 +91,17 @@ export async function scheduleUpload(payload: SchedulePayload): Promise<{ id: st
   });
   if (!res.ok) throw new Error('Failed to schedule upload');
   return res.json();
+}
+
+export async function getScheduledJobs(userId: string): Promise<ScheduledJob[]> {
+  const res = await fetch(`${BACKEND_URL}/api/schedule?userId=${userId}`);
+  if (!res.ok) throw new Error('Failed to fetch scheduled uploads');
+  return res.json();
+}
+
+export async function cancelScheduledJob(id: string): Promise<void> {
+  const res = await fetch(`${BACKEND_URL}/api/schedule/${id}`, { method: 'DELETE' });
+  if (!res.ok) throw new Error('Failed to cancel scheduled upload');
 }
 
 // ─── Upload (XHR-based for NDJSON streaming) ─────────────────────────────────
