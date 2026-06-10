@@ -72,29 +72,36 @@ function extractTitleFromUrl(videoUrl) {
   return 'YouTube Short';
 }
 
-function downloadVideo(videoUrl, outputPath) {
+function buildYtdlpArgs(videoUrl, outputPath, simpleFormat = false) {
+  const baseArgs = [
+    '--no-playlist',
+    '--retries', '3',
+    '--fragment-retries', '3',
+    '--user-agent', 'Mozilla/5.0 (Linux; Android 11; Pixel 5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36',
+    '--sleep-interval', '2',
+    '--max-sleep-interval', '5',
+    '-o', outputPath,
+    videoUrl,
+  ];
+
+  if (simpleFormat) {
+    baseArgs.splice(1, 0, '-f', 'best');
+  } else {
+    baseArgs.splice(1, 0, '-f', 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best', '--merge-output-format', 'mp4');
+  }
+
+  if (fs.pathExistsSync(YOUTUBE_COOKIES_PATH)) {
+    baseArgs.unshift(`--cookies=${YOUTUBE_COOKIES_PATH}`);
+    console.log('[yt-dlp] Using YouTube cookies file for download');
+  } else {
+    console.warn('[yt-dlp] No YouTube cookies file found. If downloads fail with bot-check errors, upload cookies via /api/youtube/cookies');
+  }
+
+  return baseArgs;
+}
+
+function runYtdlp(args) {
   return new Promise((resolve, reject) => {
-    const args = [
-      '--no-playlist',
-      '-f', 'best[ext=mp4]/best',
-      '--retries', '3',
-      '--fragment-retries', '3',
-      '--extractor-args', 'youtube:player_client=web,mweb',
-      '--user-agent', 'Mozilla/5.0 (Linux; Android 11; Pixel 5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36',
-      '--sleep-interval', '2',
-      '--max-sleep-interval', '5',
-      '-o', outputPath,
-      videoUrl,
-    ];
-
-    // Pass YouTube cookies if available (required when server IP is flagged)
-    if (fs.pathExistsSync(YOUTUBE_COOKIES_PATH)) {
-      args.unshift(`--cookies=${YOUTUBE_COOKIES_PATH}`);
-      console.log('[yt-dlp] Using YouTube cookies file for download');
-    } else {
-      console.warn('[yt-dlp] No YouTube cookies file found. If downloads fail with bot-check errors, upload cookies via /api/youtube/cookies');
-    }
-
     const ytProcess = spawn('yt-dlp', args);
     let stderr = '';
 
@@ -103,19 +110,37 @@ function downloadVideo(videoUrl, outputPath) {
     ytProcess.on('close', async (code) => {
       if (code !== 0) {
         const errText = stderr.trim();
-        // Give a more user-friendly message for the bot-check error
-        if (errText.includes('Sign in to confirm') || errText.includes('not a bot')) {
-          return reject(new Error(
-            'YouTube is blocking the download (bot check). Please upload YouTube cookies via the Account tab → "Upload YouTube Cookies" to fix this.'
-          ));
-        }
         return reject(new Error(`yt-dlp exited with code ${code}: ${errText}`));
       }
-      const exists = await fs.pathExists(outputPath);
-      if (!exists) return reject(new Error('Downloaded video file not found.'));
-      resolve(outputPath);
+      resolve();
     });
   });
+}
+
+async function downloadVideo(videoUrl, outputPath) {
+  const primaryArgs = buildYtdlpArgs(videoUrl, outputPath, false);
+  try {
+    await runYtdlp(primaryArgs);
+  } catch (error) {
+    const message = error.message || '';
+    if (message.includes('Requested format is not available') || message.includes('Only images are available') || message.includes('GVS PO Token') || message.includes('challenge solving failed')) {
+      console.warn('[yt-dlp] Primary download failed on YouTube format extraction. Retrying with a simpler download request.');
+      const fallbackArgs = buildYtdlpArgs(videoUrl, outputPath, true);
+      await runYtdlp(fallbackArgs);
+    } else {
+      const errText = message;
+      if (errText.includes('Sign in to confirm') || errText.includes('not a bot')) {
+        throw new Error(
+          'YouTube is blocking the download (bot check). Please upload YouTube cookies via the Account tab → "Upload YouTube Cookies" to fix this.'
+        );
+      }
+      throw error;
+    }
+  }
+
+  const exists = await fs.pathExists(outputPath);
+  if (!exists) throw new Error('Downloaded video file not found.');
+  return outputPath;
 }
 
 async function uploadToCloudinary(localPath) {
