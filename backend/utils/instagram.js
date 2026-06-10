@@ -70,6 +70,7 @@ async function _executeDownload(reelUrl, outputPath, userId, userAgent = null) {
         '-4', // Force IPv4
         '--no-playlist',
         '--no-warnings',
+        '--no-check-certificates',
         '--js-runtimes', 'node',
         '--merge-output-format', 'mp4',
         '--recode-video', 'mp4',
@@ -169,6 +170,7 @@ async function extractInstagramMetadata(reelUrl, userId, userAgent = null) {
       '-4', // Force IPv4
       '--dump-json',
       '--no-warnings',
+      '--no-check-certificates',
       '--js-runtimes', 'node',
       '--user-agent', activeUserAgent,
       reelUrl

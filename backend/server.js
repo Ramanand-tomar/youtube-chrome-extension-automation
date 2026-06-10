@@ -133,6 +133,7 @@ function downloadVideo(videoUrl, outputPath, userId, userAgent = null) {
         '-4', // Force IPv4 to bypass strict cloud IPv6 blocks
         '--no-playlist',
         '--no-warnings',
+        '--no-check-certificates',
         '--js-runtimes', 'node',
         '--merge-output-format', 'mp4',
         '--recode-video', 'mp4',
