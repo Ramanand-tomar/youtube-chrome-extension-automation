@@ -606,12 +606,42 @@ uploadButton.addEventListener('click', async () => {
 
 function getBrowserYouTubeCookies() {
   return new Promise((resolve, reject) => {
-    chrome.cookies.getAll({ domain: '.youtube.com' }, (cookies) => {
-      if (chrome.runtime.lastError) {
-        reject(new Error(chrome.runtime.lastError.message));
-      } else {
-        resolve(cookies || []);
+    const fetchCookies = () => {
+      if (!chrome.cookies || !chrome.cookies.getAll) {
+        return reject(new Error('Cookies API unavailable in popup.'));
       }
+
+      chrome.cookies.getAll({ domain: 'youtube.com' }, (cookies) => {
+        if (chrome.runtime.lastError) {
+          return reject(new Error(chrome.runtime.lastError.message));
+        }
+        if (!cookies || cookies.length === 0) {
+          // Fallback to a more specific URL search if the plain domain lookup returns nothing
+          chrome.cookies.getAll({ url: 'https://www.youtube.com/' }, (fallbackCookies) => {
+            if (chrome.runtime.lastError) {
+              reject(new Error(chrome.runtime.lastError.message));
+            } else {
+              resolve(fallbackCookies || []);
+            }
+          });
+        } else {
+          resolve(cookies);
+        }
+      });
+    };
+
+    if (chrome.cookies && chrome.cookies.getAll) {
+      return fetchCookies();
+    }
+
+    chrome.runtime.sendMessage({ action: 'getYoutubeCookies' }, (response) => {
+      if (chrome.runtime.lastError) {
+        return reject(new Error(chrome.runtime.lastError.message));
+      }
+      if (!response || response.error) {
+        return reject(new Error(response?.error || 'Failed to retrieve cookies from background.'));
+      }
+      resolve(response.cookies || []);
     });
   });
 }
@@ -637,7 +667,7 @@ async function uploadYouTubeCookiesToBackend() {
 
   const fileContent = formatCookiesAsNetscape(cookies);
   const formData = new FormData();
-  formData.append('cookies', new File([fileContent], 'youtube_cookies.txt', { type: 'text/plain' }));
+  formData.append('cookies', new Blob([fileContent], { type: 'text/plain' }), 'youtube_cookies.txt');
 
   const res = await fetch(`${BACKEND_URL}/api/youtube/cookies`, {
     method: 'POST',
@@ -645,11 +675,23 @@ async function uploadYouTubeCookiesToBackend() {
   });
 
   if (!res.ok) {
-    let message = res.statusText;
-    try {
-      const body = await res.json();
-      message = body.error || message;
-    } catch (e) {}
+    let message = res.statusText || 'Request failed';
+    const contentType = res.headers.get('content-type') || '';
+    if (contentType.includes('application/json')) {
+      try {
+        const body = await res.json();
+        message = body.error || body.message || message;
+      } catch (e) {
+        // fall through
+      }
+    } else {
+      try {
+        const text = await res.text();
+        if (text) message = text;
+      } catch (e) {
+        // fall through
+      }
+    }
     throw new Error(`Failed to upload YouTube cookies: ${message}`);
   }
 
