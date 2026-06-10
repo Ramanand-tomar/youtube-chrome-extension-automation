@@ -1,4 +1,5 @@
 const BACKEND_URL = 'https://youtube-chrome-extension-automation.onrender.com';
+// const BACKEND_URL = 'http://localhost:3000'; // Uncomment for local testing
 
 // ─── DOM references ───────────────────────────────────────────────────────────
 const videoPreview        = document.getElementById('videoPreview');
@@ -38,23 +39,9 @@ const userEmail           = document.getElementById('userEmail');
 // ─── State ────────────────────────────────────────────────────────────────────
 let currentVideoUrl  = '';
 let currentPlatform  = null;
-let currentUserId    = null;
+let sessionToken     = null;
 let isConnected      = false;
 let authPollInterval = null;
-
-// ─── UUID / user identity ─────────────────────────────────────────────────────
-function getUserId() {
-  return new Promise((resolve) => {
-    chrome.storage.local.get('userId', (data) => {
-      if (data.userId) {
-        resolve(data.userId);
-      } else {
-        const uuid = crypto.randomUUID();
-        chrome.storage.local.set({ userId: uuid }, () => resolve(uuid));
-      }
-    });
-  });
-}
 
 // ─── UI helpers ───────────────────────────────────────────────────────────────
 function updateStatus(text, type) {
@@ -72,6 +59,8 @@ function resetUi() {
   uploadButton.disabled = false;
   setProgress(0);
   progressContainer.style.display = 'none';
+  const spinnerContainer = document.getElementById('loadingSpinnerContainer');
+  if (spinnerContainer) spinnerContainer.style.display = 'none';
   if (processLog) {
     processLog.innerHTML = '';
     processLog.style.display = 'none';
@@ -119,8 +108,19 @@ async function checkAuthStatus() {
   authDisconnected.style.display = 'none';
   authConnected.style.display   = 'none';
 
+  if (!sessionToken) {
+    authChecking.style.display = 'none';
+    authDisconnected.style.display = 'block';
+    isConnected = false;
+    updateAuthGate();
+    return;
+  }
+
   try {
-    const res = await fetch(`${BACKEND_URL}/api/auth/status?userId=${currentUserId}`);
+    const res = await fetch(`${BACKEND_URL}/api/auth/status`, {
+      headers: { 'Authorization': `Bearer ${sessionToken}` }
+    });
+    if (!res.ok) throw new Error('Not authenticated');
     const data = await res.json();
 
     isConnected = data.connected;
@@ -132,10 +132,14 @@ async function checkAuthStatus() {
       userEmail.textContent          = data.email || 'Connected';
       userAvatar.textContent         = (data.email || 'U').charAt(0).toUpperCase();
     } else {
+      chrome.storage.local.remove('sessionToken');
+      sessionToken = null;
       authDisconnected.style.display = 'block';
       authConnected.style.display    = 'none';
     }
   } catch {
+    chrome.storage.local.remove('sessionToken');
+    sessionToken = null;
     authChecking.style.display  = 'none';
     authDisconnected.style.display = 'block';
     isConnected = false;
@@ -155,43 +159,67 @@ function updateAuthGate() {
 // Auth gate banner → jump to Account tab
 authGate.addEventListener('click', () => activateTab('account'));
 
+function startPolling(nonce) {
+  if (authPollInterval) {
+    clearInterval(authPollInterval);
+  }
+
+  let attempts = 0;
+  authPollInterval = setInterval(async () => {
+    attempts++;
+    try {
+      const pollRes  = await fetch(`${BACKEND_URL}/api/auth/poll?nonce=${nonce}`);
+      if (pollRes.status === 404) {
+        // Nonce expired or deleted
+        clearInterval(authPollInterval);
+        authPollInterval = null;
+        chrome.storage.local.remove('pendingNonce');
+        return;
+      }
+      if (!pollRes.ok) throw new Error('Poll request failed');
+      const pollData = await pollRes.json();
+
+      if (pollData.connected && pollData.sessionToken) {
+        clearInterval(authPollInterval);
+        authPollInterval = null;
+        sessionToken = pollData.sessionToken;
+        chrome.storage.local.remove('pendingNonce');
+        chrome.storage.local.set({ sessionToken }, async () => {
+          isConnected = true;
+          await checkAuthStatus(); // re-renders account UI
+        });
+      }
+    } catch (e) {
+      console.error('Polling error:', e);
+    }
+
+    if (attempts >= 40) { // 2 minutes timeout
+      clearInterval(authPollInterval);
+      authPollInterval = null;
+      chrome.storage.local.remove('pendingNonce');
+      checkAuthStatus();
+    }
+  }, 3000);
+}
+
 async function connectAccount() {
   connectBtn.disabled = true;
   connectBtn.textContent = 'Opening Google…';
 
   try {
-    const res  = await fetch(`${BACKEND_URL}/api/auth/youtube?userId=${currentUserId}`);
+    const res  = await fetch(`${BACKEND_URL}/api/auth/youtube`);
     const data = await res.json();
 
-    if (!data.authUrl) throw new Error('No auth URL returned');
+    if (!data.authUrl || !data.nonce) throw new Error('No auth URL or nonce returned');
 
-    // Open OAuth in a new tab
-    chrome.tabs.create({ url: data.authUrl });
-
-    // Poll every 3 seconds until connected (up to 2 minutes)
-    connectBtn.textContent = 'Waiting for auth…';
-    let attempts = 0;
-    authPollInterval = setInterval(async () => {
-      attempts++;
-      try {
-        const statusRes  = await fetch(`${BACKEND_URL}/api/auth/status?userId=${currentUserId}`);
-        const statusData = await statusRes.json();
-
-        if (statusData.connected) {
-          clearInterval(authPollInterval);
-          authPollInterval = null;
-          isConnected = true;
-          await checkAuthStatus(); // re-renders account UI
-        }
-      } catch { }
-
-      if (attempts >= 40) { // 40 × 3s = 2 min timeout
-        clearInterval(authPollInterval);
-        authPollInterval = null;
-        connectBtn.disabled = false;
-        connectBtn.innerHTML = '<svg width="18" height="18" viewBox="0 0 18 18"><path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.615z"/><path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332C2.438 15.983 5.482 18 9 18z"/><path fill="#FBBC05" d="M3.964 10.71c-.18-.54-.282-1.117-.282-1.71s.102-1.17.282-1.71V4.958H.957C.347 6.173 0 7.548 0 9s.348 2.827.957 4.042l3.007-2.332z"/><path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0 5.482 0 2.438 2.017.957 4.958L3.964 7.29C4.672 5.163 6.656 3.58 9 3.58z"/></svg> Sign in with Google';
-      }
-    }, 3000);
+    // Store the pending nonce in local storage so we can resume polling if popup is closed
+    chrome.storage.local.set({ pendingNonce: data.nonce }, () => {
+      // Open OAuth in a new tab
+      chrome.tabs.create({ url: data.authUrl });
+      
+      connectBtn.textContent = 'Waiting for auth…';
+      startPolling(data.nonce);
+    });
 
   } catch (err) {
     connectBtn.disabled = false;
@@ -207,7 +235,12 @@ async function disconnectAccount() {
   disconnectBtn.textContent = 'Disconnecting…';
 
   try {
-    await fetch(`${BACKEND_URL}/api/auth/logout?userId=${currentUserId}`, { method: 'DELETE' });
+    await fetch(`${BACKEND_URL}/api/auth/logout`, {
+      method: 'DELETE',
+      headers: { 'Authorization': `Bearer ${sessionToken}` }
+    });
+    chrome.storage.local.remove('sessionToken');
+    sessionToken = null;
     isConnected = false;
     updateAuthGate();
     await checkAuthStatus();
@@ -241,7 +274,14 @@ scheduleToggle.addEventListener('change', () => {
 async function loadScheduledJobs() {
   try {
     scheduledList.innerHTML = '';
-    const res = await fetch(`${BACKEND_URL}/api/schedule?userId=${currentUserId}`);
+    if (!sessionToken) {
+      scheduledEmptyState.style.display = 'flex';
+      scheduledList.style.display = 'none';
+      return;
+    }
+    const res = await fetch(`${BACKEND_URL}/api/schedule`, {
+      headers: { 'Authorization': `Bearer ${sessionToken}` }
+    });
     if (!res.ok) throw new Error(`Failed to load jobs: ${res.statusText}`);
     const jobs = await res.json();
 
@@ -293,7 +333,10 @@ async function loadScheduledJobs() {
           cancelBtn.disabled = true;
           cancelBtn.textContent = 'Canceling…';
           try {
-            const delRes = await fetch(`${BACKEND_URL}/api/schedule/${job.id}`, { method: 'DELETE' });
+            const delRes = await fetch(`${BACKEND_URL}/api/schedule/${job.id}`, {
+              method: 'DELETE',
+              headers: { 'Authorization': `Bearer ${sessionToken}` }
+            });
             if (delRes.ok) {
               loadScheduledJobs();
             } else {
@@ -353,7 +396,7 @@ function getVideoInfoFromPage(tabId) {
               try {
                 const title = document.title;
                 if (title) {
-                  const match = title.match(/["""']([^"""']+)["""']/);
+                  const match = title.match(/["']([^"']+)["']/);
                   if (match && match[1]) return match[1].trim();
                 }
               } catch { }
@@ -362,7 +405,7 @@ function getVideoInfoFromPage(tabId) {
                 if (metaDesc) {
                   const content = metaDesc.getAttribute('content');
                   if (content) {
-                    const m = content.match(/on\s+Instagram\s*:\s*["""'](.*)["""']/i);
+                    const m = content.match(/on\s+Instagram\s*:\s*["'](.*)["']/i);
                     if (m && m[1]) return m[1].trim();
                   }
                 }
@@ -408,6 +451,8 @@ async function loadVideoInfo() {
     videoPreview.textContent   = `📺 YouTube: ${response.title}`;
     titleInput.value           = response.title || '';
     uploadButton.textContent   = 'Upload to YouTube';
+    uploadButton.disabled      = false;
+    scheduleToggle.disabled    = false;
     privacySelect.style.display = 'block';
     document.getElementById('privacyGroup').style.display = 'block';
     updateStatus('Ready to upload to YouTube.', 'success');
@@ -418,12 +463,23 @@ async function loadVideoInfo() {
     titleInput.value           = response.caption?.substring(0, 100) || 'Instagram Reel';
     descriptionInput.value     = response.caption || '';
     uploadButton.textContent   = 'Upload to YouTube';
+    uploadButton.disabled      = false;
+    scheduleToggle.disabled    = false;
     privacySelect.style.display = 'none';
     document.getElementById('privacyGroup').style.display = 'none';
     updateStatus('Ready to upload Instagram Reel to YouTube.', 'success');
   } else {
     platformBadge.textContent = 'Unknown';
     platformBadge.className   = 'platform-badge';
+    videoPreview.textContent  = 'No video detected';
+    titleInput.value          = '';
+    descriptionInput.value    = '';
+    currentVideoUrl           = '';
+    currentPlatform           = null;
+    uploadButton.disabled     = true;
+    scheduleToggle.disabled   = true;
+    scheduleToggle.checked    = false;
+    scheduleTimeContainer.style.display = 'none';
     updateStatus('This extension works on YouTube or Instagram Reel pages.', 'error');
   }
 }
@@ -451,6 +507,15 @@ async function parseNdjsonStream(reader) {
 
 function handleStreamEvent(event) {
   const { step, message } = event;
+  const spinnerContainer = document.getElementById('loadingSpinnerContainer');
+  const spinnerStatusText = document.getElementById('spinnerStatusText');
+
+  if (spinnerContainer && step !== 'complete' && step !== 'error') {
+    spinnerContainer.style.display = 'flex';
+  }
+  if (spinnerStatusText && message) {
+    spinnerStatusText.textContent = message;
+  }
 
   if (step === 'downloading') {
     setProgress(10); updateStatus('⬇️ ' + message, '');
@@ -475,6 +540,7 @@ function handleStreamEvent(event) {
     updateStatus(`${icon} ${message}`, status === 'error' ? 'error' : '');
   } else if (step === 'complete') {
     setProgress(100);
+    if (spinnerContainer) spinnerContainer.style.display = 'none';
     if (event.videoUrl) {
       statusMessage.innerHTML = '';
       const link = document.createElement('a');
@@ -489,12 +555,19 @@ function handleStreamEvent(event) {
     uploadButton.disabled = false;
   } else if (step === 'error') {
     updateStatus('❌ ' + (message || 'Upload failed.'), 'error');
+    if (spinnerContainer) spinnerContainer.style.display = 'none';
     uploadButton.disabled = false;
   }
 }
 
 // ─── Upload button ────────────────────────────────────────────────────────────
 uploadButton.addEventListener('click', async () => {
+  // Explicit platform guard
+  if (currentPlatform !== 'youtube' && currentPlatform !== 'instagram') {
+    updateStatus('Invalid platform. Please navigate to a supported YouTube or Instagram page.', 'error');
+    return;
+  }
+
   if (!currentVideoUrl) { updateStatus('No video detected.', 'error'); return; }
   if (currentPlatform === 'youtube'   && !isValidYouTubeUrl(currentVideoUrl))     { updateStatus('Invalid YouTube URL.', 'error'); return; }
   if (currentPlatform === 'instagram' && !isValidInstagramReelUrl(currentVideoUrl)) { updateStatus('Invalid Instagram URL.', 'error'); return; }
@@ -524,9 +597,11 @@ uploadButton.addEventListener('click', async () => {
       await syncYouTubeCookiesIfNeeded();
       const res = await fetch(`${BACKEND_URL}/api/schedule`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${sessionToken}`
+        },
         body: JSON.stringify({
-          userId:      currentUserId,
           videoUrl:    currentVideoUrl,
           title:       titleInput.value.trim()       || undefined,
           description: descriptionInput.value.trim() || undefined,
@@ -569,9 +644,11 @@ uploadButton.addEventListener('click', async () => {
     if (currentPlatform === 'instagram') {
       const res = await fetch(`${BACKEND_URL}/api/process-batch`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${sessionToken}`
+        },
         body: JSON.stringify({
-          userId:            currentUserId,
           urls:              [currentVideoUrl],
           defaultCredit:     true,
           globalTitle:       titleInput.value.trim()       || undefined,
@@ -584,9 +661,11 @@ uploadButton.addEventListener('click', async () => {
       await syncYouTubeCookiesIfNeeded();
       const res = await fetch(`${BACKEND_URL}/api/process`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${sessionToken}`
+        },
         body: JSON.stringify({
-          userId:      currentUserId,
           videoUrl:    currentVideoUrl,
           title:       titleInput.value.trim()       || undefined,
           description: descriptionInput.value.trim() || undefined,
@@ -671,6 +750,7 @@ async function uploadYouTubeCookiesToBackend() {
 
   const res = await fetch(`${BACKEND_URL}/api/youtube/cookies`, {
     method: 'POST',
+    headers: { 'Authorization': `Bearer ${sessionToken}` },
     body: formData,
   });
 
@@ -718,6 +798,11 @@ async function syncYouTubeCookiesIfNeeded() {
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
 window.addEventListener('DOMContentLoaded', async () => {
-  currentUserId = await getUserId();
-  await Promise.all([loadVideoInfo(), checkAuthStatus()]);
+  chrome.storage.local.get(['sessionToken', 'pendingNonce'], async (data) => {
+    sessionToken = data.sessionToken || null;
+    await Promise.all([loadVideoInfo(), checkAuthStatus()]);
+    if (!sessionToken && data.pendingNonce) {
+      startPolling(data.pendingNonce);
+    }
+  });
 });

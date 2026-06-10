@@ -83,6 +83,21 @@ async function updateJob(id, updates) {
   );
 }
 
+async function claimDueJobs() {
+  const { rows } = await pool.query(
+    `UPDATE scheduled_jobs
+     SET status = 'processing', updated_at = NOW()
+     WHERE id IN (
+       SELECT id FROM scheduled_jobs
+       WHERE status = 'pending' AND scheduled_at <= NOW()
+       ORDER BY scheduled_at ASC
+       FOR UPDATE SKIP LOCKED
+     )
+     RETURNING *`
+  );
+  return rows.map(rowToJob);
+}
+
 async function removeJob(id) {
   const { rowCount } = await pool.query(
     `DELETE FROM scheduled_jobs WHERE id = $1 AND status = 'pending'`,
@@ -91,4 +106,4 @@ async function removeJob(id) {
   return rowCount > 0;
 }
 
-module.exports = { addJob, getJobs, getDueJobs, updateJob, removeJob };
+module.exports = { addJob, getJobs, getDueJobs, claimDueJobs, updateJob, removeJob };

@@ -4,15 +4,18 @@ const path = require('path');
 
 const YTDLP_COMMAND = process.env.YTDLP_COMMAND || 'yt-dlp';
 const COOKIES_DIR = path.resolve(__dirname, '../cookies');
-const INSTAGRAM_COOKIES_PATH = path.join(COOKIES_DIR, 'instagram.txt');
 
 // Ensure cookies directory exists
 fs.ensureDirSync(COOKIES_DIR);
 
+function getInstagramCookiesPath(userId) {
+  return path.join(COOKIES_DIR, `instagram_cookies_${userId}.txt`);
+}
+
 /**
  * Download Instagram Reel with retry logic and metadata extraction
  */
-async function downloadInstagramReel(reelUrl, outputPath, maxRetries = 3) {
+async function downloadInstagramReel(reelUrl, outputPath, userId, maxRetries = 3) {
   let lastError;
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
@@ -24,7 +27,7 @@ async function downloadInstagramReel(reelUrl, outputPath, maxRetries = 3) {
         await new Promise((resolve) => setTimeout(resolve, delay));
       }
 
-      return await _executeDownload(reelUrl, outputPath);
+      return await _executeDownload(reelUrl, outputPath, userId);
     } catch (error) {
       lastError = error;
       console.warn(`Instagram reel download attempt ${attempt}/${maxRetries} failed:`, error.message);
@@ -44,14 +47,15 @@ async function downloadInstagramReel(reelUrl, outputPath, maxRetries = 3) {
 /**
  * Execute yt-dlp download for Instagram reel
  */
-async function _executeDownload(reelUrl, outputPath) {
+async function _executeDownload(reelUrl, outputPath, userId) {
   return new Promise((resolve, reject) => {
     const targetFormats = ['bestvideo[height<=1080]+bestaudio/best', 'best[height<=1080]/best', 'best'];
 
     const buildArgs = (formatString) => {
       const args = ['--no-playlist', '--no-warnings', '--js-runtimes', 'node', '-f', formatString, '--merge-output-format', 'mp4', '--recode-video', 'mp4', '-o', outputPath, reelUrl];
-      if (fs.pathExistsSync(INSTAGRAM_COOKIES_PATH)) {
-        args.unshift(`--cookies=${INSTAGRAM_COOKIES_PATH}`);
+      const userCookiesPath = getInstagramCookiesPath(userId);
+      if (userId && fs.pathExistsSync(userCookiesPath)) {
+        args.unshift(`--cookies=${userCookiesPath}`);
       }
       return args;
     };
@@ -121,13 +125,14 @@ async function _executeDownload(reelUrl, outputPath) {
 /**
  * Extract metadata from Instagram reel using yt-dlp --dump-json
  */
-async function extractInstagramMetadata(reelUrl) {
+async function extractInstagramMetadata(reelUrl, userId) {
   return new Promise((resolve, reject) => {
     const args = ['--dump-json', '--no-warnings', '--js-runtimes', 'node', reelUrl];
 
     // Add cookies if available
-    if (fs.pathExistsSync(INSTAGRAM_COOKIES_PATH)) {
-      args.splice(0, 0, `--cookies=${INSTAGRAM_COOKIES_PATH}`);
+    const userCookiesPath = getInstagramCookiesPath(userId);
+    if (userId && fs.pathExistsSync(userCookiesPath)) {
+      args.splice(0, 0, `--cookies=${userCookiesPath}`);
     }
 
     const ytProcess = spawn(YTDLP_COMMAND, args);
@@ -144,7 +149,7 @@ async function extractInstagramMetadata(reelUrl) {
 
     ytProcess.on('error', (error) => {
       if (error.code === 'ENOENT') {
-        return reject(new Error(`yt-dlp executable not found. Install yt-dlp or set YTDLP_COMMAND to a valid command.`));
+        return reject(new Error('yt-dlp executable not found. Install yt-dlp or set YTDLP_COMMAND to a valid command.'));
       }
       reject(error);
     });
@@ -185,20 +190,22 @@ async function extractInstagramMetadata(reelUrl) {
 /**
  * Check if Instagram cookies are available
  */
-async function hasCookies() {
-  return fs.pathExists(INSTAGRAM_COOKIES_PATH);
+async function hasCookies(userId) {
+  const userCookiesPath = getInstagramCookiesPath(userId);
+  return fs.pathExists(userCookiesPath);
 }
 
 /**
  * Save Instagram cookies from uploaded file
  */
-async function saveCookies(cookieBuffer) {
+async function saveCookies(userId, cookieBuffer) {
   try {
-    await fs.writeFile(INSTAGRAM_COOKIES_PATH, cookieBuffer);
-    console.log('Instagram cookies saved successfully');
+    const userCookiesPath = getInstagramCookiesPath(userId);
+    await fs.writeFile(userCookiesPath, cookieBuffer);
+    console.log(`Instagram cookies saved successfully for user ${userId}`);
     return true;
   } catch (error) {
-    console.error('Error saving cookies:', error);
+    console.error(`Error saving cookies for user ${userId}:`, error);
     throw error;
   }
 }
@@ -206,13 +213,14 @@ async function saveCookies(cookieBuffer) {
 /**
  * Delete Instagram cookies
  */
-async function deleteCookies() {
+async function deleteCookies(userId) {
   try {
-    await fs.remove(INSTAGRAM_COOKIES_PATH);
-    console.log('Instagram cookies deleted');
+    const userCookiesPath = getInstagramCookiesPath(userId);
+    await fs.remove(userCookiesPath);
+    console.log(`Instagram cookies deleted for user ${userId}`);
     return true;
   } catch (error) {
-    console.error('Error deleting cookies:', error);
+    console.error(`Error deleting cookies for user ${userId}:`, error);
     throw error;
   }
 }

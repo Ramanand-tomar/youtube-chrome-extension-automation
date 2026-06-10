@@ -13,7 +13,7 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false },
   max: 10,
   idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 5000,
+  connectionTimeoutMillis: 30000,
 });
 
 
@@ -46,6 +46,26 @@ async function initDb() {
       video_url_result TEXT,
       created_at       TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
       updated_at       TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS sessions (
+      session_id  VARCHAR(64)  PRIMARY KEY,
+      user_id     VARCHAR(36)  NOT NULL,
+      created_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+      expires_at  TIMESTAMPTZ  NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS oauth_nonces (
+      nonce          VARCHAR(64)  PRIMARY KEY,
+      user_id        VARCHAR(36)  NOT NULL,
+      session_token  VARCHAR(64),
+      email          VARCHAR(255),
+      created_at     TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS daily_quotas (
+      upload_date  DATE  PRIMARY KEY,
+      upload_count INTEGER NOT NULL DEFAULT 0
     );
   `);
   console.log('[DB] Schema initialized');

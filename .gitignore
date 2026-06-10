@@ -8,3 +8,7 @@ downloads/
 backend/downloads/
 .DS_Store
 Thumbs.db
+backend/cookies/
+backend/quota/
+cookies/
+quota/

@@ -1,12 +1,6 @@
-const fs = require('fs-extra');
-const path = require('path');
+const { pool } = require('../db');
 
-const QUOTA_DIR = path.resolve(__dirname, '../quota');
-const QUOTA_FILE = path.join(QUOTA_DIR, 'daily-uploads.json');
 const MAX_DAILY_UPLOADS = parseInt(process.env.MAX_DAILY_UPLOADS || '10', 10);
-
-// Ensure quota directory exists
-fs.ensureDirSync(QUOTA_DIR);
 
 /**
  * Get today's date as YYYY-MM-DD string
@@ -17,72 +11,59 @@ function getTodayDate() {
 }
 
 /**
- * Load quota data from file
- */
-async function loadQuotaData() {
-  try {
-    if (await fs.pathExists(QUOTA_FILE)) {
-      return await fs.readJson(QUOTA_FILE);
-    }
-  } catch (error) {
-    console.error('Error loading quota data:', error);
-  }
-  return {};
-}
-
-/**
- * Save quota data to file
- */
-async function saveQuotaData(data) {
-  try {
-    const tempPath = `${QUOTA_FILE}.tmp`;
-    await fs.writeJson(tempPath, data, { spaces: 2 });
-    await fs.move(tempPath, QUOTA_FILE, { overwrite: true });
-  } catch (error) {
-    console.error('Error saving quota data:', error);
-    throw error;
-  }
-}
-
-/**
  * Get today's upload count
  */
 async function getTodayUploadCount() {
-  const data = await loadQuotaData();
   const today = getTodayDate();
-  return data[today] || 0;
+  try {
+    const { rows } = await pool.query(
+      'SELECT upload_count FROM daily_quotas WHERE upload_date = $1',
+      [today]
+    );
+    return rows[0]?.upload_count || 0;
+  } catch (error) {
+    console.error('Error fetching today upload count:', error);
+    throw error;
+  }
 }
 
 /**
  * Check if upload is allowed (has not exceeded quota)
  */
 async function isUploadAllowed(count = 1) {
-  const today = getTodayDate();
   const currentCount = await getTodayUploadCount();
   return currentCount + count <= MAX_DAILY_UPLOADS;
 }
 
 /**
- * Increment upload count for today
+ * Increment upload count for today using transactional/atomic insert & update
  */
 async function incrementUploadCount(count = 1) {
-  const data = await loadQuotaData();
   const today = getTodayDate();
+  try {
+    const { rows } = await pool.query(
+      `INSERT INTO daily_quotas (upload_date, upload_count)
+       VALUES ($1, $2)
+       ON CONFLICT (upload_date)
+       DO UPDATE SET upload_count = daily_quotas.upload_count + $2
+       RETURNING upload_count`,
+      [today, count]
+    );
 
-  // Clean up old dates (older than 7 days)
-  const cutoffDate = new Date();
-  cutoffDate.setDate(cutoffDate.getDate() - 7);
-  const cutoffDateStr = cutoffDate.toISOString().split('T')[0];
-
-  for (const date in data) {
-    if (date < cutoffDateStr) {
-      delete data[date];
+    // Clean up old dates (older than 7 days)
+    try {
+      await pool.query(
+        "DELETE FROM daily_quotas WHERE upload_date < NOW() - INTERVAL '7 days'"
+      );
+    } catch (err) {
+      console.error('Failed to clean up old daily_quotas:', err);
     }
-  }
 
-  data[today] = (data[today] || 0) + count;
-  await saveQuotaData(data);
-  return data[today];
+    return rows[0]?.upload_count || 0;
+  } catch (error) {
+    console.error('Error incrementing upload count:', error);
+    throw error;
+  }
 }
 
 /**
@@ -104,7 +85,7 @@ async function getQuotaInfo() {
     current,
     max: MAX_DAILY_UPLOADS,
     remaining,
-    resetDate: new Date().toISOString().split('T')[0],
+    resetDate: getTodayDate(),
   };
 }
 
@@ -112,10 +93,16 @@ async function getQuotaInfo() {
  * Reset quota for a specific date (for testing)
  */
 async function resetQuota(date = null) {
-  const data = await loadQuotaData();
   const targetDate = date || getTodayDate();
-  delete data[targetDate];
-  await saveQuotaData(data);
+  try {
+    await pool.query(
+      'DELETE FROM daily_quotas WHERE upload_date = $1',
+      [targetDate]
+    );
+  } catch (error) {
+    console.error('Error resetting quota:', error);
+    throw error;
+  }
 }
 
 module.exports = {

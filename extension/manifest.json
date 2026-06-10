@@ -4,7 +4,7 @@
   "version": "2.0.0",
   "description": "Upload YouTube Shorts and Instagram Reels through a backend processing pipeline.",
   "permissions": ["activeTab", "scripting", "tabs", "storage", "cookies"],
-  "host_permissions": ["https://www.youtube.com/*", "https://youtube.com/*", "https://www.instagram.com/*", "https://instagram.com/*", "https://youtube-chrome-extension-automation.onrender.com/*"],
+  "host_permissions": ["https://www.youtube.com/*", "https://youtube.com/*", "https://www.instagram.com/*", "https://instagram.com/*", "https://youtube-chrome-extension-automation.onrender.com/*", "http://localhost/*"],
   "action": {
     "default_popup": "popup.html",
     "default_icon": {
