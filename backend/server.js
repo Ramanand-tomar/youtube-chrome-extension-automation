@@ -78,7 +78,7 @@ function buildYtdlpArgs(videoUrl, outputPath, strategy = 'best') {
     '--no-playlist',
     '--retries', '5',
     '--fragment-retries', '5',
-    '--extractor-args', 'youtube:skip=hls/dash',
+    '--extractor-args', 'youtube:player_client=android,skip=hls/dash',
     '--user-agent', 'Mozilla/5.0 (Linux; Android 11; Pixel 5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36',
     '--socket-timeout', '30',
     '--sleep-interval', '2',
