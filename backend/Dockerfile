@@ -4,8 +4,8 @@ RUN apt-get update \
   && apt-get install -y python3 python3-pip ffmpeg curl ca-certificates \
   && rm -rf /var/lib/apt/lists/*
 
-# Install latest yt-dlp with Instagram support and JavaScript runtime support
-RUN pip3 install --break-system-packages --upgrade yt-dlp pycryptodome mutagen websockets
+# Install latest yt-dlp with EJS challenge solver support and Instagram support
+RUN pip3 install --break-system-packages --upgrade "yt-dlp[ejs]" pycryptodome mutagen websockets
 
 WORKDIR /app
 
