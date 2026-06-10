@@ -139,6 +139,10 @@ function downloadVideo(videoUrl, outputPath, userId, userAgent = null) {
         '--user-agent', activeUserAgent,
         '-o', outputPath
       ];
+      // Route through a proxy if configured in Render environment variables
+      if (process.env.PROXY_URL) {
+        args.push('--proxy', process.env.PROXY_URL);
+      }
       // Add client configuration arguments (e.g., extractor args)
       if (clientConfig && clientConfig.args) {
         args.push(...clientConfig.args);

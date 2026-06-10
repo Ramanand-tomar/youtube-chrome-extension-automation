@@ -76,6 +76,9 @@ async function _executeDownload(reelUrl, outputPath, userId, userAgent = null) {
         '--user-agent', activeUserAgent,
         '-o', outputPath, reelUrl
       ];
+      if (process.env.PROXY_URL) {
+        args.push('--proxy', process.env.PROXY_URL);
+      }
       if (formatString) {
         args.unshift('-f', formatString);
       }
@@ -170,6 +173,9 @@ async function extractInstagramMetadata(reelUrl, userId, userAgent = null) {
       '--user-agent', activeUserAgent,
       reelUrl
     ];
+    if (process.env.PROXY_URL) {
+      args.push('--proxy', process.env.PROXY_URL);
+    }
 
     // Add cookies if available
     const userCookiesPath = getInstagramCookiesPath(userId);
