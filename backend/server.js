@@ -19,6 +19,7 @@ const db = require('./db');
 
 const PORT = process.env.PORT || 3000;
 const DOWNLOADS_DIR = path.resolve(__dirname, 'downloads');
+const YOUTUBE_COOKIES_PATH = path.resolve(__dirname, 'cookies', 'youtube_cookies.txt');
 
 fs.ensureDirSync(DOWNLOADS_DIR);
 
@@ -71,7 +72,12 @@ function extractTitleFromUrl(videoUrl) {
 
 function downloadVideo(videoUrl, outputPath) {
   return new Promise((resolve, reject) => {
-    const args = ['--no-playlist', '-f', 'best[ext=mp4]/best', '-o', outputPath, videoUrl];
+    const args = ['--no-playlist', '--no-warnings', '--no-call-home', '--js-runtimes', 'node', '-f', 'best[ext=mp4]/best', '-o', outputPath];
+    if (fs.existsSync(YOUTUBE_COOKIES_PATH)) {
+      args.unshift('--cookies', YOUTUBE_COOKIES_PATH);
+    }
+    args.push(videoUrl);
+
     const ytProcess = spawn('yt-dlp', args);
     let stderr = '';
 
@@ -451,6 +457,50 @@ app.delete('/api/instagram/cookies', async (req, res) => {
   try {
     await instagram.deleteCookies();
     res.json({ success: true, message: 'Instagram cookies deleted' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+function hasYoutubeCookies() {
+  return fs.pathExists(YOUTUBE_COOKIES_PATH);
+}
+
+async function saveYoutubeCookies(fileContent) {
+  await fs.ensureDir(path.dirname(YOUTUBE_COOKIES_PATH));
+  await fs.writeFile(YOUTUBE_COOKIES_PATH, fileContent);
+}
+
+async function deleteYoutubeCookies() {
+  await fs.remove(YOUTUBE_COOKIES_PATH);
+}
+
+app.get('/api/youtube/cookies/status', async (req, res) => {
+  try {
+    const hasCookies = await hasYoutubeCookies();
+    res.json({ hasCookies, message: hasCookies ? 'YouTube cookies available' : 'No YouTube cookies found.' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/youtube/cookies', upload.single('cookies'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+    const fileContent = await fs.readFile(req.file.path);
+    await saveYoutubeCookies(fileContent);
+    await fs.remove(req.file.path);
+    res.json({ success: true, message: 'YouTube cookies uploaded and saved successfully' });
+  } catch (error) {
+    if (req.file) await fs.remove(req.file.path).catch(() => {});
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete('/api/youtube/cookies', async (req, res) => {
+  try {
+    await deleteYoutubeCookies();
+    res.json({ success: true, message: 'YouTube cookies deleted' });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
