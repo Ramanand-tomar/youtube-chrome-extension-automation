@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { 
   StyleSheet, Text, View, TextInput, TouchableOpacity, ScrollView, 
-  ActivityIndicator, Switch, Alert
+  ActivityIndicator, Switch, Alert, Modal
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -9,13 +9,37 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as WebBrowser from 'expo-web-browser';
 import axios from 'axios';
 import { API_BASE_URL } from '../config';
-import { extractYoutubeDirectUrl } from '../utils/extractor';
+import WebView from 'react-native-webview';
+import CookieManager from '@react-native-cookies/cookies';
 
 // Simple polyfill-ish random generator for nonce
 const generateNonce = () => Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('upload'); // 'upload', 'scheduled', 'account'
+  const [showYouTubeLogin, setShowYouTubeLogin] = useState(false);
+  
+  const handleExtractCookies = async () => {
+    try {
+      const cookies = await CookieManager.get('https://youtube.com');
+      // Format cookies into a string like "name=value; name=value"
+      const cookieString = Object.keys(cookies).map(key => `${key}=${cookies[key].value}`).join('; ');
+      
+      if (!cookieString || cookieString.length === 0) {
+        Alert.alert('Error', 'No cookies found. Did you log in?');
+        return;
+      }
+
+      await axios.post(`${API_BASE_URL}/youtube/cookies`, { cookies: cookieString }, {
+        headers: { Authorization: `Bearer ${sessionToken}` }
+      });
+      Alert.alert('Success', 'YouTube cookies uploaded successfully to bypass bot detection!');
+      setShowYouTubeLogin(false);
+    } catch (e) {
+      console.error(e);
+      Alert.alert('Error', 'Failed to extract cookies');
+    }
+  };
   
   // Auth state
   const [sessionToken, setSessionToken] = useState<string | null>(null);
@@ -149,78 +173,23 @@ export default function App() {
     setProgress(0.1);
 
     try {
-      let directUrl = '';
-      
-      const isYouTube = videoUrl.includes('youtube.com') || videoUrl.includes('youtu.be');
-      
-      if (isYouTube) {
-        // Use client-side extraction to use user IP
-        setStatus('Extracting YouTube video URL locally...');
-        directUrl = await extractYoutubeDirectUrl(videoUrl);
-      } else {
-        // Fallback to backend extraction for Instagram
-        setStatus('Extracting video URL via backend...');
-        const extractRes = await axios.get(`${API_BASE_URL}/mobile/extract-url`, {
-          params: { url: videoUrl },
-          headers: { Authorization: `Bearer ${sessionToken}` }
-        });
-        directUrl = extractRes.data.directUrl;
-      }
-      
-      if (!directUrl) throw new Error('Failed to extract direct video URL');
+      setStatus('Sending request to backend...');
+      setProgress(0.5);
 
-      setStatus('Downloading video to device...');
-      setProgress(0.3);
-
-      // 2. Download directly to client device
-      // eslint-disable-next-line import/namespace
-      const localUri = FileSystem.cacheDirectory + `temp_video_${Date.now()}.mp4`;
-      
-      const downloadRes = await FileSystem.downloadAsync(directUrl, localUri);
-      if (downloadRes.status !== 200) {
-        throw new Error('Failed to download video locally');
-      }
-
-      setStatus('Uploading video to server...');
-      setProgress(0.6);
-
-      // 3. Upload the downloaded file to Backend
-      const formData = new FormData();
-      formData.append('video', {
-        uri: localUri,
-        name: 'video.mp4',
-        type: 'video/mp4'
-      } as any);
-      formData.append('title', title);
-      formData.append('description', description);
-      formData.append('privacy', privacy);
-      formData.append('postToYouTube', String(postToYouTube));
-      formData.append('crossPostToInstagram', String(crossPostToInstagram));
-      formData.append('originalUrl', videoUrl);
-
-      // If scheduled, maybe call a different endpoint, but for now we just use process-upload
-      // Note: Backend currently doesn't schedule from process-upload, it expects /api/schedule
-      // We will handle schedule separately or just upload now for this demo.
-      
-      await axios.post(`${API_BASE_URL}/mobile/process-upload`, formData, {
-        headers: {
-          'Content-Type': 'multipart/form-data',
-          'Authorization': `Bearer ${sessionToken}`
-        },
-        onUploadProgress: (progressEvent) => {
-          if (progressEvent.total) {
-            const pct = 0.6 + (progressEvent.loaded / progressEvent.total) * 0.3;
-            setProgress(pct);
-          }
-        }
+      const res = await axios.post(`${API_BASE_URL}/mobile/upload`, {
+        videoUrl,
+        title,
+        description,
+        privacy,
+        postToYouTube,
+        crossPostToInstagram
+      }, {
+        headers: { Authorization: `Bearer ${sessionToken}` }
       });
 
       setStatus('Success! Video uploaded and processed.');
       setProgress(1.0);
-      Alert.alert('Success', 'Video uploaded successfully');
-
-      // 4. Clean up local file
-      await FileSystem.deleteAsync(localUri, { idempotent: true });
+      Alert.alert('Success', 'Video is processing on the backend');
 
     } catch (error: any) {
       console.error(error);
@@ -254,6 +223,11 @@ export default function App() {
             {sessionToken ? (
               <View>
                 <Text style={styles.statusText}>Connected as: {email}</Text>
+
+                <TouchableOpacity style={[styles.primaryBtn, { backgroundColor: '#10b981', marginTop: 20 }]} onPress={() => setShowYouTubeLogin(true)}>
+                  <Text style={styles.primaryBtnText}>Connect YouTube Cookies (Anti-Bot)</Text>
+                </TouchableOpacity>
+
                 <TouchableOpacity style={[styles.primaryBtn, { backgroundColor: '#f87171', marginTop: 20 }]} onPress={handleDisconnect}>
                   <Text style={styles.primaryBtnText}>Disconnect</Text>
                 </TouchableOpacity>
@@ -324,6 +298,22 @@ export default function App() {
         )}
 
       </ScrollView>
+
+      <Modal visible={showYouTubeLogin} animationType="slide" onRequestClose={() => setShowYouTubeLogin(false)}>
+        <SafeAreaView style={{ flex: 1, backgroundColor: '#0f172a' }}>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', padding: 16, backgroundColor: '#1e293b' }}>
+            <Text style={{ color: '#fff', fontSize: 16, fontWeight: '700' }}>Please Log In to YouTube</Text>
+            <TouchableOpacity onPress={handleExtractCookies}>
+              <Text style={{ color: '#38bdf8', fontSize: 16, fontWeight: '700' }}>Done</Text>
+            </TouchableOpacity>
+          </View>
+          <WebView 
+            source={{ uri: 'https://m.youtube.com' }} 
+            sharedCookiesEnabled={true}
+            thirdPartyCookiesEnabled={true}
+          />
+        </SafeAreaView>
+      </Modal>
     </SafeAreaView>
   );
 }
