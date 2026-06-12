@@ -53,7 +53,7 @@ async function _executeDownload(reelUrl, outputPath, userId, userAgent = null) {
     const userCookiesPath = getInstagramCookiesPath(userId);
     const hasCookiesFile = userId && fs.pathExistsSync(userCookiesPath);
 
-    const formats = ['bestvideo[height<=1080]+bestaudio/best', 'best[height<=1080]/best', 'best'];
+    const formats = ['bestvideo[ext=mp4][height<=1920]+bestaudio[ext=m4a]/bestvideo[height<=1920]+bestaudio/best[height<=1920]', 'best[height<=1920]/best', 'best'];
 
     if (hasCookiesFile) {
       for (const fmt of formats) {

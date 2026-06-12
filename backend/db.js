@@ -67,6 +67,9 @@ async function initDb() {
       upload_date  DATE  PRIMARY KEY,
       upload_count INTEGER NOT NULL DEFAULT 0
     );
+
+    ALTER TABLE scheduled_jobs ADD COLUMN IF NOT EXISTS post_to_youtube BOOLEAN DEFAULT true;
+    ALTER TABLE scheduled_jobs ADD COLUMN IF NOT EXISTS cross_post_to_instagram BOOLEAN DEFAULT false;
   `);
   console.log('[DB] Schema initialized');
 }

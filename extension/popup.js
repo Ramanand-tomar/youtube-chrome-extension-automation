@@ -1,5 +1,5 @@
-const BACKEND_URL = 'https://youtube-chrome-extension-automation.onrender.com';
-// const BACKEND_URL = 'http://localhost:3000'; // Uncomment for local testing
+// const BACKEND_URL = 'https://youtube-chrome-extension-automation.onrender.com';
+const BACKEND_URL = 'http://localhost:3000'; // Uncomment for local testing
 
 // ─── DOM references ───────────────────────────────────────────────────────────
 const videoPreview        = document.getElementById('videoPreview');
@@ -11,7 +11,11 @@ const statusMessage       = document.getElementById('statusMessage');
 const progressContainer   = document.getElementById('progressContainer');
 const progressBar         = document.getElementById('progressBar');
 const processLog          = document.getElementById('processLog');
+const youtubeToggle       = document.getElementById('youtubeToggle');
+const crossPostToggle     = document.getElementById('crossPostToggle');
 
+// Force default value
+privacySelect.value = 'public';
 const platformBadge       = document.getElementById('platformBadge');
 const tabUploadNow        = document.getElementById('tabUploadNow');
 const tabScheduled        = document.getElementById('tabScheduled');
@@ -608,6 +612,8 @@ uploadButton.addEventListener('click', async () => {
           privacy:     privacySelect.value,
           platform:    currentPlatform,
           scheduledAt: scheduledDate.toISOString(),
+          postToYouTube: youtubeToggle.checked,
+          crossPostToInstagram: crossPostToggle.checked,
         }),
       });
       if (!res.ok) { const d = await res.json(); throw new Error(d.error || res.statusText); }
@@ -654,6 +660,8 @@ uploadButton.addEventListener('click', async () => {
           globalTitle:       titleInput.value.trim()       || undefined,
           globalDescription: descriptionInput.value.trim() || undefined,
           userAgent:         navigator.userAgent,
+          postToYouTube:     youtubeToggle.checked,
+          crossPostToInstagram: crossPostToggle.checked,
         }),
       });
       if (!res.ok || !res.body) throw new Error(`Backend error: ${res.statusText || res.status}`);
@@ -672,6 +680,8 @@ uploadButton.addEventListener('click', async () => {
           description: descriptionInput.value.trim() || undefined,
           privacy:     privacySelect.value,
           userAgent:   navigator.userAgent,
+          postToYouTube: youtubeToggle.checked,
+          crossPostToInstagram: crossPostToggle.checked,
         }),
       });
       if (!res.ok || !res.body) throw new Error(`Backend error: ${res.statusText || res.status}`);

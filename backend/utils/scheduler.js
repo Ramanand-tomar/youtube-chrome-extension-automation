@@ -16,15 +16,17 @@ function rowToJob(row) {
     videoId: row.video_id,
     videoUrlResult: row.video_url_result,
     createdAt: row.created_at?.toISOString(),
+    postToYouTube: row.post_to_youtube,
+    crossPostToInstagram: row.cross_post_to_instagram,
   };
 }
 
-async function addJob({ userId, videoUrl, title, description, privacy, platform, scheduledAt }) {
+async function addJob({ userId, videoUrl, title, description, privacy, platform, scheduledAt, postToYouTube, crossPostToInstagram }) {
   const id = randomUUID();
   await pool.query(
     `INSERT INTO scheduled_jobs
-       (id, user_id, video_url, title, description, privacy, platform, scheduled_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+       (id, user_id, video_url, title, description, privacy, platform, scheduled_at, post_to_youtube, cross_post_to_instagram)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
     [
       id,
       userId,
@@ -34,6 +36,8 @@ async function addJob({ userId, videoUrl, title, description, privacy, platform,
       privacy || 'unlisted',
       platform || 'youtube',
       scheduledAt,
+      postToYouTube !== false,
+      !!crossPostToInstagram,
     ]
   );
   const { rows } = await pool.query('SELECT * FROM scheduled_jobs WHERE id = $1', [id]);

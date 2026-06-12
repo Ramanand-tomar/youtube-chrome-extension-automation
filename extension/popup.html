@@ -762,7 +762,7 @@
           <label for="privacy">Privacy</label>
           <select id="privacy">
             <option value="unlisted">Unlisted</option>
-            <option value="public">Public</option>
+            <option value="public" selected>Public</option>
           </select>
         </div>
 
@@ -770,6 +770,18 @@
         <div class="toggle-container" id="scheduleToggleContainer">
           <input type="checkbox" id="scheduleToggle" />
           <span class="toggle-label" for="scheduleToggle">Schedule for later</span>
+        </div>
+
+        <!-- Upload to YouTube toggle -->
+        <div class="toggle-container" id="youtubeToggleContainer">
+          <input type="checkbox" id="youtubeToggle" checked />
+          <span class="toggle-label" for="youtubeToggle">Upload to YouTube Shorts</span>
+        </div>
+
+        <!-- Cross-post to Instagram toggle -->
+        <div class="toggle-container" id="crossPostToggleContainer">
+          <input type="checkbox" id="crossPostToggle" checked />
+          <span class="toggle-label" for="crossPostToggle">Cross-post to Instagram Reels</span>
         </div>
 
         <!-- Date time picker container -->
