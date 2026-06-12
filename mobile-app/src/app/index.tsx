@@ -41,11 +41,13 @@ export default function App() {
   // Start Auth Flow
   const handleConnect = async () => {
     setIsAuthenticating(true);
-    const nonce = generateNonce();
-    const authUrl = `${API_BASE_URL}/auth/youtube?nonce=${nonce}`;
     
-    // Open browser for OAuth
     try {
+      // 1. Get the auth URL and generated nonce from the backend
+      const { data } = await axios.get(`${API_BASE_URL}/auth/youtube`);
+      const { authUrl, nonce } = data;
+      
+      // 2. Open browser for OAuth
       WebBrowser.openBrowserAsync(authUrl);
       
       // Poll for status
