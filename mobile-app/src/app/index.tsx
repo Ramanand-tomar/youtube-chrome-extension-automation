@@ -8,6 +8,7 @@ import * as FileSystem from 'expo-file-system';
 import * as WebBrowser from 'expo-web-browser';
 import axios from 'axios';
 import { API_BASE_URL } from '../config';
+import { extractYoutubeDirectUrl } from '../utils/extractor';
 
 // Simple polyfill-ish random generator for nonce
 const generateNonce = () => Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
@@ -108,13 +109,24 @@ export default function App() {
     setProgress(0.1);
 
     try {
-      // 1. Extract direct MP4 URL via Backend
-      const extractRes = await axios.get(`${API_BASE_URL}/mobile/extract-url`, {
-        params: { url: videoUrl },
-        headers: { Authorization: `Bearer ${sessionToken}` }
-      });
+      let directUrl = '';
       
-      const directUrl = extractRes.data.directUrl;
+      const isYouTube = videoUrl.includes('youtube.com') || videoUrl.includes('youtu.be');
+      
+      if (isYouTube) {
+        // Use client-side extraction to use user IP
+        setStatus('Extracting YouTube video URL locally...');
+        directUrl = await extractYoutubeDirectUrl(videoUrl);
+      } else {
+        // Fallback to backend extraction for Instagram
+        setStatus('Extracting video URL via backend...');
+        const extractRes = await axios.get(`${API_BASE_URL}/mobile/extract-url`, {
+          params: { url: videoUrl },
+          headers: { Authorization: `Bearer ${sessionToken}` }
+        });
+        directUrl = extractRes.data.directUrl;
+      }
+      
       if (!directUrl) throw new Error('Failed to extract direct video URL');
 
       setStatus('Downloading video to device...');
