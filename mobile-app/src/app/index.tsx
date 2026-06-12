@@ -1,10 +1,11 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   StyleSheet, Text, View, TextInput, TouchableOpacity, ScrollView, 
   ActivityIndicator, Switch, Alert
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as WebBrowser from 'expo-web-browser';
 import axios from 'axios';
 import { API_BASE_URL } from '../config';
@@ -39,6 +40,38 @@ export default function App() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [progress, setProgress] = useState(0);
 
+  useEffect(() => {
+    // Load session on startup
+    const loadSession = async () => {
+      try {
+        const storedToken = await AsyncStorage.getItem('sessionToken');
+        const storedEmail = await AsyncStorage.getItem('email');
+        if (storedToken) {
+          // Verify with backend
+          try {
+            const res = await axios.get(`${API_BASE_URL}/auth/status`, {
+              headers: { Authorization: `Bearer ${storedToken}` }
+            });
+            if (res.data.connected) {
+              setSessionToken(storedToken);
+              setEmail(res.data.email || storedEmail);
+            } else {
+              await AsyncStorage.removeItem('sessionToken');
+              await AsyncStorage.removeItem('email');
+            }
+          } catch (e) {
+            // Keep token if offline, or clear it if backend returns 401
+            setSessionToken(storedToken);
+            setEmail(storedEmail);
+          }
+        }
+      } catch (e) {
+        console.error('Failed to load session');
+      }
+    };
+    loadSession();
+  }, []);
+
   // Start Auth Flow
   const handleConnect = async () => {
     setIsAuthenticating(true);
@@ -61,6 +94,11 @@ export default function App() {
             setEmail(res.data.email);
             setIsAuthenticating(false);
             WebBrowser.dismissBrowser();
+            
+            // Persist
+            await AsyncStorage.setItem('sessionToken', res.data.sessionToken);
+            if (res.data.email) await AsyncStorage.setItem('email', res.data.email);
+            
             Alert.alert('Success', 'YouTube Connected!');
           }
         } catch (e: any) {
@@ -88,6 +126,8 @@ export default function App() {
       });
       setSessionToken(null);
       setEmail(null);
+      await AsyncStorage.removeItem('sessionToken');
+      await AsyncStorage.removeItem('email');
     } catch (err: any) {
       Alert.alert('Logout Error', err.message);
     }
