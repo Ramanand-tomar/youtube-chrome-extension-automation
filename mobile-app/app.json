@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "mobile-app",
+    "name": "short-flow",
     "slug": "mobile-app",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -17,7 +17,8 @@
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "package": "com.ramanandtomar07.mobileapp"
     },
     "web": {
       "output": "static",
@@ -40,6 +41,12 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "e483fe67-b114-48a0-908e-85d7edb30d32"
+      }
     }
   }
 }

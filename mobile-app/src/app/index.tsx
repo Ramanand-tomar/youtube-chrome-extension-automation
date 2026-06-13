@@ -10,7 +10,13 @@ import * as WebBrowser from 'expo-web-browser';
 import axios from 'axios';
 import { API_BASE_URL } from '../config';
 import WebView from 'react-native-webview';
-import CookieManager from '@react-native-cookies/cookies';
+
+let CookieManager: any = null;
+try {
+  CookieManager = require('@react-native-cookies/cookies').default;
+} catch (e) {
+  console.warn('CookieManager native module not available. Build a dev client to use this feature.');
+}
 
 // Simple polyfill-ish random generator for nonce
 const generateNonce = () => Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
@@ -21,6 +27,10 @@ export default function App() {
   
   const handleExtractCookies = async () => {
     try {
+      if (!CookieManager) {
+        Alert.alert('Error', 'Native cookie manager is not installed. Please build a custom dev client (npx expo run:android) to use this feature.');
+        return;
+      }
       const cookies = await CookieManager.get('https://youtube.com');
       // Format cookies into a string like "name=value; name=value"
       const cookieString = Object.keys(cookies).map(key => `${key}=${cookies[key].value}`).join('; ');
@@ -176,16 +186,26 @@ export default function App() {
       setStatus('Sending request to backend...');
       setProgress(0.5);
 
-      const res = await axios.post(`${API_BASE_URL}/mobile/upload`, {
-        videoUrl,
-        title,
-        description,
-        privacy,
-        postToYouTube,
-        crossPostToInstagram
-      }, {
-        headers: { Authorization: `Bearer ${sessionToken}` }
+      const res = await fetch(`${API_BASE_URL}/process`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${sessionToken}`
+        },
+        body: JSON.stringify({
+          videoUrl,
+          title,
+          description,
+          privacy,
+          postToYouTube,
+          crossPostToInstagram
+        })
       });
+
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`Upload failed: ${res.status} ${text}`);
+      }
 
       setStatus('Success! Video uploaded and processed.');
       setProgress(1.0);
