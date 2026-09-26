@@ -232,14 +232,33 @@ async function uploadToCloudinary(localPath) {
   return { secure_url: result.secure_url, public_id: result.public_id };
 }
 
-async function uploadToYouTube(localPath, title, description, privacy = 'unlisted', videoUrl, publishAt = null, userId) {
+async function uploadToYouTube(localPath, title, description, privacy = 'unlisted', videoUrl, publishAt = null, userId, referralOptions = null) {
   const ytClient = await getYouTubeClient(userId);
 
   const rawTitle = title || extractTitleFromUrl(videoUrl || localPath);
   let preparedTitle = rawTitle.replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
-  if (preparedTitle.length > 95) preparedTitle = preparedTitle.substring(0, 92) + '...';
+
+  const refLink = referralOptions && referralOptions.referralLink ? referralOptions.referralLink.trim() : null;
+  const appendToTitle = referralOptions && referralOptions.appendToTitle;
+
+  if (refLink && appendToTitle) {
+    const refSuffix = ` 🔗 ${refLink}`;
+    const maxTitleLen = 98 - refSuffix.length;
+    if (preparedTitle.length > maxTitleLen) {
+      preparedTitle = preparedTitle.substring(0, Math.max(10, maxTitleLen - 3)) + '...';
+    }
+    preparedTitle = preparedTitle + refSuffix;
+  } else if (preparedTitle.length > 95) {
+    preparedTitle = preparedTitle.substring(0, 92) + '...';
+  }
+
   const finalTitle = preparedTitle || 'YouTube Short';
-  const preparedDescription = `${description || ''}\n\n#Shorts`.trim();
+
+  let preparedDescription = (description || '').trim();
+  if (refLink) {
+    preparedDescription += `\n\n🔗 Reference / Referral Link: ${refLink}`;
+  }
+  preparedDescription = `${preparedDescription}\n\n#Shorts`.trim();
 
   let privacyStatus = privacy === 'public' ? 'public' : 'unlisted';
   const statusBody = { privacyStatus };
@@ -260,7 +279,7 @@ async function uploadToYouTube(localPath, title, description, privacy = 'unliste
   return { id: response.data.id, url: `https://youtu.be/${response.data.id}` };
 }
 
-async function uploadToInstagram(localPath, description) {
+async function uploadToInstagram(localPath, description, referralLink = null) {
   const accessToken = process.env.INSTAGRAM_ACCESS_TOKEN;
   const igUserId = process.env.INSTAGRAM_BUSINESS_ID;
   if (!accessToken || !igUserId) throw new Error('Missing Instagram credentials in .env');
@@ -268,6 +287,11 @@ async function uploadToInstagram(localPath, description) {
   console.log('[Instagram] Uploading video to Cloudinary for temporary hosting...');
   const cloudinaryResult = await uploadToCloudinary(localPath);
   const videoUrl = cloudinaryResult.secure_url;
+
+  let caption = (description || '').trim();
+  if (referralLink) {
+    caption += `\n\n🔗 Reference Link: ${referralLink.trim()}`;
+  }
   
   try {
     console.log('[Instagram] Creating Reels container...');
@@ -275,7 +299,7 @@ async function uploadToInstagram(localPath, description) {
       params: {
         media_type: 'REELS',
         video_url: videoUrl,
-        caption: description || '',
+        caption: caption,
         access_token: accessToken
       }
     });
@@ -597,7 +621,7 @@ app.post('/api/process', authenticateToken, async (req, res) => {
   let downloadedPath = null;
 
   try {
-    const { videoUrl, title, description, privacy, userAgent, crossPostToInstagram, postToYouTube = true, transformOptions = null } = req.body || {};
+    const { videoUrl, title, description, privacy, userAgent, crossPostToInstagram, postToYouTube = true, transformOptions = null, referralOptions = null } = req.body || {};
 
     if (!videoUrl || typeof videoUrl !== 'string') throw new Error('Missing videoUrl');
 
@@ -620,7 +644,8 @@ app.post('/api/process', authenticateToken, async (req, res) => {
         privacy,
         crossPostToInstagram,
         postToYouTube,
-        transformOptions
+        transformOptions,
+        referralOptions
       );
       await quota.incrementUploadCount(1);
       sendStep({ step: 'complete', message: 'TikTok processing completed successfully.', videoId: youtubeResult.id, videoUrl: youtubeResult.url });
@@ -644,14 +669,15 @@ app.post('/api/process', authenticateToken, async (req, res) => {
     let youtubeResult = { id: null, url: null };
     if (postToYouTube) {
       sendStep({ step: 'youtube', message: 'Starting YouTube upload...' });
-      youtubeResult = await uploadToYouTube(uploadPath, title, description, privacy, videoUrl, null, req.userId);
+      youtubeResult = await uploadToYouTube(uploadPath, title, description, privacy, videoUrl, null, req.userId, referralOptions);
       sendStep({ step: 'youtube', message: 'YouTube upload complete.', videoId: youtubeResult.id, videoUrl: youtubeResult.url });
     }
 
     if (crossPostToInstagram) {
       sendStep({ step: 'instagram', message: 'Starting Instagram cross-post...' });
       try {
-        const igResult = await uploadToInstagram(uploadPath, description);
+        const refLink = referralOptions ? referralOptions.referralLink : null;
+        const igResult = await uploadToInstagram(uploadPath, description, refLink);
         sendStep({ step: 'instagram', message: 'Instagram upload complete.', videoUrl: igResult.url });
       } catch (igError) {
         console.error('Instagram cross-post failed:', igError);
@@ -677,7 +703,7 @@ app.post('/api/process', authenticateToken, async (req, res) => {
 
 /**
  * POST /api/process-batch
- * Batch upload Instagram Reels. Respects quotas and supports transformOptions.
+ * Batch upload Instagram Reels. Respects quotas and supports transformOptions & referralOptions.
  */
 app.post('/api/process-batch', authenticateToken, async (req, res) => {
   res.setHeader('Content-Type', 'application/x-ndjson');
@@ -688,7 +714,7 @@ app.post('/api/process-batch', authenticateToken, async (req, res) => {
   const sendStep = (payload) => res.write(`${JSON.stringify(payload)}\n`);
 
   try {
-    const { urls = [], defaultCredit = true, globalTitle = '', globalDescription = '', userAgent, privacy = 'public', crossPostToInstagram = false, postToYouTube = true, transformOptions = null } = req.body || {};
+    const { urls = [], defaultCredit = true, globalTitle = '', globalDescription = '', userAgent, privacy = 'public', crossPostToInstagram = false, postToYouTube = true, transformOptions = null, referralOptions = null } = req.body || {};
 
 
     if (!Array.isArray(urls) || urls.length === 0) throw new Error('Missing or empty urls array');
@@ -732,7 +758,8 @@ app.post('/api/process-batch', authenticateToken, async (req, res) => {
             privacy,
             crossPostToInstagram,
             postToYouTube,
-            transformOptions
+            transformOptions,
+            referralOptions
           );
         } else {
           await processInstagramReel(
@@ -749,7 +776,8 @@ app.post('/api/process-batch', authenticateToken, async (req, res) => {
             privacy,
             crossPostToInstagram,
             postToYouTube,
-            transformOptions
+            transformOptions,
+            referralOptions
           );
         }
 
@@ -1030,7 +1058,7 @@ app.get('/api/quota', authenticateToken, async (req, res) => {
 });
 
 // ─── processInstagramReel ─────────────────────────────────────────────────────
-async function processInstagramReel(reelUrl, globalTitle, globalDescription, creditUser, progressCallback, publishAt = null, userId, userAgent = null, requestedPrivacy = 'public', crossPostToInstagram = false, postToYouTube = true, transformOptions = null) {
+async function processInstagramReel(reelUrl, globalTitle, globalDescription, creditUser, progressCallback, publishAt = null, userId, userAgent = null, requestedPrivacy = 'public', crossPostToInstagram = false, postToYouTube = true, transformOptions = null, referralOptions = null) {
   let downloadedPath = null;
   let finalVideoPath = null;
 
@@ -1069,13 +1097,14 @@ async function processInstagramReel(reelUrl, globalTitle, globalDescription, cre
     const privacy = publishAt ? 'private' : requestedPrivacy;
     let youtubeResult = { id: null, url: null };
     if (postToYouTube) {
-      youtubeResult = await uploadToYouTube(finalVideoPath, title, description, privacy, reelUrl, publishAt, userId);
+      youtubeResult = await uploadToYouTube(finalVideoPath, title, description, privacy, reelUrl, publishAt, userId, referralOptions);
     }
 
     if (crossPostToInstagram && !publishAt) {
       progressCallback('Starting Instagram cross-post...');
       try {
-        const igResult = await uploadToInstagram(finalVideoPath, description);
+        const refLink = referralOptions ? referralOptions.referralLink : null;
+        const igResult = await uploadToInstagram(finalVideoPath, description, refLink);
         progressCallback(`Instagram upload complete: ${igResult.url}`);
       } catch (igError) {
         console.error('Instagram cross-post failed:', igError);
@@ -1098,7 +1127,7 @@ async function processInstagramReel(reelUrl, globalTitle, globalDescription, cre
 }
 
 // ─── processTikTokVideo ───────────────────────────────────────────────────────
-async function processTikTokVideo(tiktokUrl, globalTitle, globalDescription, creditUser, progressCallback, publishAt = null, userId, userAgent = null, requestedPrivacy = 'public', crossPostToInstagram = false, postToYouTube = true, transformOptions = null) {
+async function processTikTokVideo(tiktokUrl, globalTitle, globalDescription, creditUser, progressCallback, publishAt = null, userId, userAgent = null, requestedPrivacy = 'public', crossPostToInstagram = false, postToYouTube = true, transformOptions = null, referralOptions = null) {
   let downloadedPath = null;
   let finalVideoPath = null;
 
@@ -1137,13 +1166,14 @@ async function processTikTokVideo(tiktokUrl, globalTitle, globalDescription, cre
     const privacy = publishAt ? 'private' : requestedPrivacy;
     let youtubeResult = { id: null, url: null };
     if (postToYouTube) {
-      youtubeResult = await uploadToYouTube(finalVideoPath, title, description, privacy, tiktokUrl, publishAt, userId);
+      youtubeResult = await uploadToYouTube(finalVideoPath, title, description, privacy, tiktokUrl, publishAt, userId, referralOptions);
     }
 
     if (crossPostToInstagram && !publishAt) {
       progressCallback('Starting Instagram cross-post...');
       try {
-        const igResult = await uploadToInstagram(finalVideoPath, description);
+        const refLink = referralOptions ? referralOptions.referralLink : null;
+        const igResult = await uploadToInstagram(finalVideoPath, description, refLink);
         progressCallback(`Instagram upload complete: ${igResult.url}`);
       } catch (igError) {
         console.error('Instagram cross-post failed:', igError);

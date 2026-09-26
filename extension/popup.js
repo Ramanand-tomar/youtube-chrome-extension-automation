@@ -42,6 +42,34 @@ if (transformToggle) {
   });
 }
 
+// Referral / Reference link elements
+const referralLinkInput      = document.getElementById('referralLinkInput');
+const appendRefToTitleToggle = document.getElementById('appendRefToTitleToggle');
+
+// Auto-load saved referral link settings
+if (typeof chrome !== 'undefined' && chrome && chrome.storage && chrome.storage.local) {
+  chrome.storage.local.get(['savedReferralLink', 'savedAppendRefToTitle'], (result) => {
+    if (result.savedReferralLink && referralLinkInput) {
+      referralLinkInput.value = result.savedReferralLink;
+    }
+    if (typeof result.savedAppendRefToTitle !== 'undefined' && appendRefToTitleToggle) {
+      appendRefToTitleToggle.checked = result.savedAppendRefToTitle;
+    }
+  });
+
+  // Auto-save on change
+  if (referralLinkInput) {
+    referralLinkInput.addEventListener('input', () => {
+      chrome.storage.local.set({ savedReferralLink: referralLinkInput.value.trim() });
+    });
+  }
+  if (appendRefToTitleToggle) {
+    appendRefToTitleToggle.addEventListener('change', () => {
+      chrome.storage.local.set({ savedAppendRefToTitle: appendRefToTitleToggle.checked });
+    });
+  }
+}
+
 // Account tab elements
 const authGate            = document.getElementById('authGate');
 const authChecking        = document.getElementById('authChecking');
@@ -651,6 +679,15 @@ uploadButton.addEventListener('click', async () => {
       }
     }
 
+    // Build referralOptions if provided
+    let referralOptions = null;
+    if (referralLinkInput && referralLinkInput.value.trim()) {
+      referralOptions = {
+        referralLink: referralLinkInput.value.trim(),
+        appendToTitle: appendRefToTitleToggle ? appendRefToTitleToggle.checked : true
+      };
+    }
+
     uploadButton.disabled    = true;
     uploadButton.textContent = '⏳ Scheduling…';
     updateStatus('Scheduling video...', 'info');
@@ -673,7 +710,8 @@ uploadButton.addEventListener('click', async () => {
           scheduledAt: scheduledDate.toISOString(),
           postToYouTube: youtubeToggle.checked,
           crossPostToInstagram: crossPostToggle.checked,
-          transformOptions: transformOptions
+          transformOptions: transformOptions,
+          referralOptions: referralOptions
         }),
       });
       if (!res.ok) { const d = await res.json(); throw new Error(d.error || res.statusText); }
@@ -702,6 +740,15 @@ uploadButton.addEventListener('click', async () => {
     if (topBannerText && topBannerText.value.trim()) {
       transformOptions.topBannerText = topBannerText.value.trim();
     }
+  }
+
+  // Build referralOptions if provided
+  let referralOptions = null;
+  if (referralLinkInput && referralLinkInput.value.trim()) {
+    referralOptions = {
+      referralLink: referralLinkInput.value.trim(),
+      appendToTitle: appendRefToTitleToggle ? appendRefToTitleToggle.checked : true
+    };
   }
 
   resetUi();
@@ -734,7 +781,8 @@ uploadButton.addEventListener('click', async () => {
           userAgent:         navigator.userAgent,
           postToYouTube:     youtubeToggle.checked,
           crossPostToInstagram: crossPostToggle.checked,
-          transformOptions:  transformOptions
+          transformOptions:  transformOptions,
+          referralOptions:   referralOptions
         }),
       });
       if (!res.ok || !res.body) throw new Error(`Backend error: ${res.statusText || res.status}`);
@@ -755,7 +803,8 @@ uploadButton.addEventListener('click', async () => {
           userAgent:   navigator.userAgent,
           postToYouTube: youtubeToggle.checked,
           crossPostToInstagram: crossPostToggle.checked,
-          transformOptions: transformOptions
+          transformOptions: transformOptions,
+          referralOptions: referralOptions
         }),
       });
       if (!res.ok || !res.body) throw new Error(`Backend error: ${res.statusText || res.status}`);
