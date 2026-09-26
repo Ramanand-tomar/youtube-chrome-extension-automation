@@ -10,7 +10,7 @@ RUN pip3 install --break-system-packages --upgrade "yt-dlp[ejs]"
 WORKDIR /app
 
 COPY package*.json ./
-RUN npm ci --omit=dev
+RUN npm install --omit=dev
 
 COPY . .
 RUN mkdir -p downloads cookies quota schedule
