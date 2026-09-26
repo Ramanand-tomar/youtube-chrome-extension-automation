@@ -9,11 +9,13 @@ RUN pip3 install --break-system-packages --upgrade "yt-dlp[ejs]"
 
 WORKDIR /app
 
-# Handle both root build context and subfolder build context
-COPY package*.json backend/package*.jso[n] ./
+# Copy backend package files
+COPY backend/package*.json ./
 RUN npm install --omit=dev
 
-COPY . .
+# Copy all contents inside backend/ directly into /app/
+COPY backend/. ./
+
 RUN mkdir -p downloads cookies quota schedule
 
 EXPOSE 3000
