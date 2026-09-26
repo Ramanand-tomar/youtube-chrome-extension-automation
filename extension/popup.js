@@ -1,5 +1,5 @@
-// const BACKEND_URL = 'https://youtube-chrome-extension-automation.onrender.com';
-const BACKEND_URL = 'http://localhost:3000'; // Uncomment for local testing
+const BACKEND_URL = 'https://youtube-chrome-extension-automation-1.onrender.com';
+// const BACKEND_URL = 'http://localhost:3000'; // Uncomment for local testing
 
 // ─── DOM references ───────────────────────────────────────────────────────────
 const videoPreview        = document.getElementById('videoPreview');
