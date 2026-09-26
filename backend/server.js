@@ -12,11 +12,14 @@ const cron = require('node-cron');
 const multer = require('multer');
 const axios = require('axios');
 
-const YTDLP_COMMAND = process.env.YTDLP_COMMAND || 'yt-dlp';
+const localYtDlp = path.resolve(__dirname, 'yt-dlp.exe');
+const YTDLP_COMMAND = fs.existsSync(localYtDlp) ? localYtDlp : (process.env.YTDLP_COMMAND || 'yt-dlp');
 
 const instagram = require('./utils/instagram');
+const tiktok = require('./utils/tiktok');
 const quota = require('./utils/quota');
 const scheduler = require('./utils/scheduler');
+const videoTransformer = require('./utils/videoTransformer');
 const db = require('./db');
 
 const PORT = process.env.PORT || 3000;
@@ -594,7 +597,7 @@ app.post('/api/process', authenticateToken, async (req, res) => {
   let downloadedPath = null;
 
   try {
-    const { videoUrl, title, description, privacy, userAgent, crossPostToInstagram, postToYouTube = true } = req.body || {};
+    const { videoUrl, title, description, privacy, userAgent, crossPostToInstagram, postToYouTube = true, transformOptions = null } = req.body || {};
 
     if (!videoUrl || typeof videoUrl !== 'string') throw new Error('Missing videoUrl');
 
@@ -604,23 +607,51 @@ app.post('/api/process', authenticateToken, async (req, res) => {
       throw new Error(`Daily quota exceeded. Remaining uploads: ${remaining}`);
     }
 
+    if (videoUrl.includes('tiktok.com')) {
+      const youtubeResult = await processTikTokVideo(
+        videoUrl,
+        title,
+        description,
+        true,
+        (msg) => sendStep({ step: 'downloading', message: msg }),
+        null,
+        req.userId,
+        userAgent,
+        privacy,
+        crossPostToInstagram,
+        postToYouTube,
+        transformOptions
+      );
+      await quota.incrementUploadCount(1);
+      sendStep({ step: 'complete', message: 'TikTok processing completed successfully.', videoId: youtubeResult.id, videoUrl: youtubeResult.url });
+      return;
+    }
+
     downloadedPath = path.join(DOWNLOADS_DIR, `download-${Date.now()}.mp4`);
     sendStep({ step: 'downloading', message: 'Starting video download...' });
     await downloadVideo(videoUrl, downloadedPath, req.userId, userAgent);
     sendStep({ step: 'downloading', message: 'Video download complete.' });
 
-    // Cloudinary upload bypassed - directly uploading downloadedPath to YouTube
+    let uploadPath = downloadedPath;
+    if (transformOptions) {
+      sendStep({ step: 'transforming', message: 'Transforming video with FFmpeg filters...' });
+      const transformedPath = path.join(DOWNLOADS_DIR, `transformed-${Date.now()}.mp4`);
+      await videoTransformer.transformVideo(downloadedPath, transformedPath, transformOptions);
+      uploadPath = transformedPath;
+      sendStep({ step: 'transforming', message: 'Video transformation complete.' });
+    }
+
     let youtubeResult = { id: null, url: null };
     if (postToYouTube) {
       sendStep({ step: 'youtube', message: 'Starting YouTube upload...' });
-      youtubeResult = await uploadToYouTube(downloadedPath, title, description, privacy, videoUrl, null, req.userId);
+      youtubeResult = await uploadToYouTube(uploadPath, title, description, privacy, videoUrl, null, req.userId);
       sendStep({ step: 'youtube', message: 'YouTube upload complete.', videoId: youtubeResult.id, videoUrl: youtubeResult.url });
     }
 
     if (crossPostToInstagram) {
       sendStep({ step: 'instagram', message: 'Starting Instagram cross-post...' });
       try {
-        const igResult = await uploadToInstagram(downloadedPath, description);
+        const igResult = await uploadToInstagram(uploadPath, description);
         sendStep({ step: 'instagram', message: 'Instagram upload complete.', videoUrl: igResult.url });
       } catch (igError) {
         console.error('Instagram cross-post failed:', igError);
@@ -632,6 +663,7 @@ app.post('/api/process', authenticateToken, async (req, res) => {
 
     sendStep({ step: 'cleanup', message: 'Cleaning temporary files...' });
     if (downloadedPath) { await fs.remove(downloadedPath); downloadedPath = null; }
+    if (uploadPath && uploadPath !== downloadedPath) { await fs.remove(uploadPath); }
 
     sendStep({ step: 'complete', message: 'Process completed successfully.', videoId: youtubeResult.id, videoUrl: youtubeResult.url });
   } catch (error) {
@@ -645,7 +677,7 @@ app.post('/api/process', authenticateToken, async (req, res) => {
 
 /**
  * POST /api/process-batch
- * Batch upload Instagram Reels. Respects quotas.
+ * Batch upload Instagram Reels. Respects quotas and supports transformOptions.
  */
 app.post('/api/process-batch', authenticateToken, async (req, res) => {
   res.setHeader('Content-Type', 'application/x-ndjson');
@@ -656,11 +688,11 @@ app.post('/api/process-batch', authenticateToken, async (req, res) => {
   const sendStep = (payload) => res.write(`${JSON.stringify(payload)}\n`);
 
   try {
-    const { urls = [], defaultCredit = true, globalTitle = '', globalDescription = '', userAgent, privacy = 'public', crossPostToInstagram = false, postToYouTube = true } = req.body || {};
+    const { urls = [], defaultCredit = true, globalTitle = '', globalDescription = '', userAgent, privacy = 'public', crossPostToInstagram = false, postToYouTube = true, transformOptions = null } = req.body || {};
 
 
     if (!Array.isArray(urls) || urls.length === 0) throw new Error('Missing or empty urls array');
-    if (urls.length > 10) throw new Error('Maximum 10 reels per batch submission');
+    if (urls.length > 20) throw new Error('Maximum 20 reels per batch submission');
 
     const allowed = await quota.isUploadAllowed(urls.length);
     if (!allowed) {
@@ -685,21 +717,41 @@ app.post('/api/process-batch', authenticateToken, async (req, res) => {
           await new Promise((resolve) => setTimeout(resolve, delay));
         }
 
-        await processInstagramReel(
-          url,
-          globalTitle,
-          globalDescription,
-          defaultCredit,
-          (message) => {
-            sendStep({ step: 'batch-processing', message: `Reel ${reelIndex}: ${message}`, reel: reelIndex, total: urls.length, status: 'processing' });
-          },
-          null,
-          req.userId,
-          userAgent,
-          privacy,
-          crossPostToInstagram,
-          postToYouTube
-        );
+        if (url.includes('tiktok.com')) {
+          await processTikTokVideo(
+            url,
+            globalTitle,
+            globalDescription,
+            defaultCredit,
+            (message) => {
+              sendStep({ step: 'batch-processing', message: `TikTok ${reelIndex}: ${message}`, reel: reelIndex, total: urls.length, status: 'processing' });
+            },
+            null,
+            req.userId,
+            userAgent,
+            privacy,
+            crossPostToInstagram,
+            postToYouTube,
+            transformOptions
+          );
+        } else {
+          await processInstagramReel(
+            url,
+            globalTitle,
+            globalDescription,
+            defaultCredit,
+            (message) => {
+              sendStep({ step: 'batch-processing', message: `Reel ${reelIndex}: ${message}`, reel: reelIndex, total: urls.length, status: 'processing' });
+            },
+            null,
+            req.userId,
+            userAgent,
+            privacy,
+            crossPostToInstagram,
+            postToYouTube,
+            transformOptions
+          );
+        }
 
         successCount++;
         sendStep({ step: 'batch-processing', message: `Reel ${reelIndex} uploaded successfully`, reel: reelIndex, total: urls.length, status: 'success' });
@@ -722,6 +774,50 @@ app.post('/api/process-batch', authenticateToken, async (req, res) => {
   res.end();
 });
 
+// ─── Video Transformation Endpoints ─────────────────────────────────────────
+
+/**
+ * GET /api/transform/presets
+ * Returns available video transformation presets and default options.
+ */
+app.get('/api/transform/presets', (req, res) => {
+  res.json({
+    presets: videoTransformer.PRESETS,
+    availableColorFilters: ['none', 'warm', 'cool', 'cinematic', 'contrast']
+  });
+});
+
+/**
+ * POST /api/transform
+ * Direct video transformation endpoint. Downloads video, transforms it with FFmpeg, and returns temporary path/status.
+ */
+app.post('/api/transform', authenticateToken, async (req, res) => {
+  let downloadedPath = null;
+  let transformedPath = null;
+
+  try {
+    const { videoUrl, options = {} } = req.body || {};
+    if (!videoUrl) return res.status(400).json({ error: 'Missing videoUrl parameter' });
+
+    downloadedPath = path.join(DOWNLOADS_DIR, `pretransform-${Date.now()}.mp4`);
+    transformedPath = path.join(DOWNLOADS_DIR, `transformed-${Date.now()}.mp4`);
+
+    await downloadVideo(videoUrl, downloadedPath, req.userId);
+    await videoTransformer.transformVideo(downloadedPath, transformedPath, options);
+
+    res.json({
+      success: true,
+      message: 'Video transformed successfully',
+      transformedFile: path.basename(transformedPath)
+    });
+  } catch (error) {
+    console.error('Transform endpoint error:', error);
+    res.status(500).json({ error: error.message || 'Transformation failed' });
+  } finally {
+    if (downloadedPath) await fs.remove(downloadedPath).catch(() => {});
+  }
+});
+
 // ─── Mobile App Endpoints ───────────────────────────────────────────────────
 
 /**
@@ -737,9 +833,14 @@ app.get('/api/mobile/extract-url', authenticateToken, async (req, res) => {
     // or run a quick yt-dlp -g
     const ytArgs = ['-g', '-4', '--no-warnings', '--js-runtimes', 'node', url];
     
-    // Add Instagram cookies if needed
+    // Add Instagram / TikTok cookies if needed
     if (url.includes('instagram.com')) {
       const userCookiesPath = instagram.COOKIES_DIR ? path.join(instagram.COOKIES_DIR, `instagram_cookies_${req.userId}.txt`) : null;
+      if (userCookiesPath && fs.existsSync(userCookiesPath)) {
+        ytArgs.splice(0, 0, `--cookies=${userCookiesPath}`);
+      }
+    } else if (url.includes('tiktok.com')) {
+      const userCookiesPath = tiktok.COOKIES_DIR ? path.join(tiktok.COOKIES_DIR, `tiktok_cookies_${req.userId}.txt`) : null;
       if (userCookiesPath && fs.existsSync(userCookiesPath)) {
         ytArgs.splice(0, 0, `--cookies=${userCookiesPath}`);
       }
@@ -885,6 +986,39 @@ app.delete('/api/youtube/cookies', authenticateToken, async (req, res) => {
   }
 });
 
+// ─── TikTok Cookie Endpoints ──────────────────────────────────────────────────
+
+app.get('/api/tiktok/cookies/status', authenticateToken, async (req, res) => {
+  try {
+    const hasCookies = await tiktok.hasCookies(req.userId);
+    res.json({ hasCookies, message: hasCookies ? 'TikTok cookies available' : 'No TikTok cookies found.' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/tiktok/cookies', authenticateToken, upload.single('cookies'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+    const fileContent = await fs.readFile(req.file.path);
+    await tiktok.saveCookies(req.userId, fileContent);
+    await fs.remove(req.file.path);
+    res.json({ success: true, message: 'TikTok cookies uploaded and saved successfully' });
+  } catch (error) {
+    if (req.file) await fs.remove(req.file.path).catch(() => {});
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete('/api/tiktok/cookies', authenticateToken, async (req, res) => {
+  try {
+    await tiktok.deleteCookies(req.userId);
+    res.json({ success: true, message: 'TikTok cookies deleted' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // ─── Quota ────────────────────────────────────────────────────────────────────
 app.get('/api/quota', authenticateToken, async (req, res) => {
   try {
@@ -896,8 +1030,9 @@ app.get('/api/quota', authenticateToken, async (req, res) => {
 });
 
 // ─── processInstagramReel ─────────────────────────────────────────────────────
-async function processInstagramReel(reelUrl, globalTitle, globalDescription, creditUser, progressCallback, publishAt = null, userId, userAgent = null, requestedPrivacy = 'public', crossPostToInstagram = false, postToYouTube = true) {
+async function processInstagramReel(reelUrl, globalTitle, globalDescription, creditUser, progressCallback, publishAt = null, userId, userAgent = null, requestedPrivacy = 'public', crossPostToInstagram = false, postToYouTube = true, transformOptions = null) {
   let downloadedPath = null;
+  let finalVideoPath = null;
 
   try {
     progressCallback('Extracting metadata...');
@@ -906,8 +1041,14 @@ async function processInstagramReel(reelUrl, globalTitle, globalDescription, cre
     progressCallback('Downloading reel...');
     downloadedPath = path.join(DOWNLOADS_DIR, `instagram-${Date.now()}.mp4`);
     await instagram.downloadInstagramReel(reelUrl, downloadedPath, userId, userAgent);
+    finalVideoPath = downloadedPath;
 
-    // Cloudinary upload bypassed
+    if (transformOptions) {
+      progressCallback('Transforming reel with FFmpeg filters...');
+      const transformedPath = path.join(DOWNLOADS_DIR, `transformed-ig-${Date.now()}.mp4`);
+      await videoTransformer.transformVideo(downloadedPath, transformedPath, transformOptions);
+      finalVideoPath = transformedPath;
+    }
 
     progressCallback('Uploading to YouTube...');
     const rawCaption = (metadata.caption || '').replace(/[\r\n]+/g, ' ').trim();
@@ -928,13 +1069,13 @@ async function processInstagramReel(reelUrl, globalTitle, globalDescription, cre
     const privacy = publishAt ? 'private' : requestedPrivacy;
     let youtubeResult = { id: null, url: null };
     if (postToYouTube) {
-      youtubeResult = await uploadToYouTube(downloadedPath, title, description, privacy, reelUrl, publishAt, userId);
+      youtubeResult = await uploadToYouTube(finalVideoPath, title, description, privacy, reelUrl, publishAt, userId);
     }
 
     if (crossPostToInstagram && !publishAt) {
       progressCallback('Starting Instagram cross-post...');
       try {
-        const igResult = await uploadToInstagram(downloadedPath, description);
+        const igResult = await uploadToInstagram(finalVideoPath, description);
         progressCallback(`Instagram upload complete: ${igResult.url}`);
       } catch (igError) {
         console.error('Instagram cross-post failed:', igError);
@@ -944,6 +1085,7 @@ async function processInstagramReel(reelUrl, globalTitle, globalDescription, cre
 
     progressCallback('Cleaning up...');
     if (downloadedPath) { await fs.remove(downloadedPath); downloadedPath = null; }
+    if (finalVideoPath && finalVideoPath !== downloadedPath) { await fs.remove(finalVideoPath); finalVideoPath = null; }
 
     progressCallback(`Uploaded: ${youtubeResult.url}`);
     return youtubeResult;
@@ -951,6 +1093,75 @@ async function processInstagramReel(reelUrl, globalTitle, globalDescription, cre
     throw error;
   } finally {
     if (downloadedPath) await fs.remove(downloadedPath).catch(() => {});
+    if (finalVideoPath && finalVideoPath !== downloadedPath) await fs.remove(finalVideoPath).catch(() => {});
+  }
+}
+
+// ─── processTikTokVideo ───────────────────────────────────────────────────────
+async function processTikTokVideo(tiktokUrl, globalTitle, globalDescription, creditUser, progressCallback, publishAt = null, userId, userAgent = null, requestedPrivacy = 'public', crossPostToInstagram = false, postToYouTube = true, transformOptions = null) {
+  let downloadedPath = null;
+  let finalVideoPath = null;
+
+  try {
+    progressCallback('Extracting TikTok metadata...');
+    const metadata = await tiktok.extractTikTokMetadata(tiktokUrl, userId, userAgent);
+
+    progressCallback('Downloading TikTok video...');
+    downloadedPath = path.join(DOWNLOADS_DIR, `tiktok-${Date.now()}.mp4`);
+    await tiktok.downloadTikTokVideo(tiktokUrl, downloadedPath, userId, userAgent);
+    finalVideoPath = downloadedPath;
+
+    if (transformOptions) {
+      progressCallback('Transforming video with FFmpeg filters...');
+      const transformedPath = path.join(DOWNLOADS_DIR, `transformed-tt-${Date.now()}.mp4`);
+      await videoTransformer.transformVideo(downloadedPath, transformedPath, transformOptions);
+      finalVideoPath = transformedPath;
+    }
+
+    progressCallback('Uploading to YouTube...');
+    const rawCaption = (metadata.caption || '').replace(/[\r\n]+/g, ' ').trim();
+    const title = (globalTitle && globalTitle.trim()) ||
+                  (rawCaption && rawCaption.substring(0, 80)) ||
+                  'TikTok Video';
+
+    let description = globalDescription || metadata.caption || '';
+    if (creditUser) {
+      const formatDate = metadata.uploadDate ? formatInstagramDate(metadata.uploadDate) : '';
+      description += `\n\n🔄 Originally posted on TikTok by ${metadata.uploader}`;
+      if (formatDate) description += `\n📅 Date: ${formatDate}`;
+      description += '\n#Shorts #TikTok';
+    } else {
+      description += '\n\n#Shorts';
+    }
+
+    const privacy = publishAt ? 'private' : requestedPrivacy;
+    let youtubeResult = { id: null, url: null };
+    if (postToYouTube) {
+      youtubeResult = await uploadToYouTube(finalVideoPath, title, description, privacy, tiktokUrl, publishAt, userId);
+    }
+
+    if (crossPostToInstagram && !publishAt) {
+      progressCallback('Starting Instagram cross-post...');
+      try {
+        const igResult = await uploadToInstagram(finalVideoPath, description);
+        progressCallback(`Instagram upload complete: ${igResult.url}`);
+      } catch (igError) {
+        console.error('Instagram cross-post failed:', igError);
+        progressCallback('Instagram cross-post failed: ' + igError.message);
+      }
+    }
+
+    progressCallback('Cleaning up...');
+    if (downloadedPath) { await fs.remove(downloadedPath); downloadedPath = null; }
+    if (finalVideoPath && finalVideoPath !== downloadedPath) { await fs.remove(finalVideoPath); finalVideoPath = null; }
+
+    progressCallback(`Uploaded: ${youtubeResult.url}`);
+    return youtubeResult;
+  } catch (error) {
+    throw error;
+  } finally {
+    if (downloadedPath) await fs.remove(downloadedPath).catch(() => {});
+    if (finalVideoPath && finalVideoPath !== downloadedPath) await fs.remove(finalVideoPath).catch(() => {});
   }
 }
 
@@ -973,6 +1184,19 @@ async function executeScheduledJob(job) {
 
     if (job.platform === 'instagram') {
       youtubeResult = await processInstagramReel(
+        job.videoUrl,
+        job.title,
+        job.description,
+        true,
+        (msg) => console.log(`[Job ${job.id}]: ${msg}`),
+        job.scheduledAt,
+        job.userId,
+        null,
+        job.privacy,
+        job.crossPostToInstagram
+      );
+    } else if (job.platform === 'tiktok') {
+      youtubeResult = await processTikTokVideo(
         job.videoUrl,
         job.title,
         job.description,

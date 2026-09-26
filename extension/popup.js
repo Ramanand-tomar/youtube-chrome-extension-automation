@@ -30,6 +30,18 @@ const scheduleTimeInput   = document.getElementById('scheduleTime');
 const scheduledList       = document.getElementById('scheduledList');
 const scheduledEmptyState = document.getElementById('scheduledEmptyState');
 
+// Reel Transformer elements
+const transformToggle          = document.getElementById('transformToggle');
+const transformOptionsContainer = document.getElementById('transformOptionsContainer');
+const transformPreset          = document.getElementById('transformPreset');
+const topBannerText            = document.getElementById('topBannerText');
+
+if (transformToggle) {
+  transformToggle.addEventListener('change', () => {
+    transformOptionsContainer.style.display = transformToggle.checked ? 'block' : 'none';
+  });
+}
+
 // Account tab elements
 const authGate            = document.getElementById('authGate');
 const authChecking        = document.getElementById('authChecking');
@@ -372,6 +384,9 @@ function isValidYouTubeUrl(url) {
 function isValidInstagramReelUrl(url) {
   return /^(https:\/\/)?(www\.)?instagram\.com\/(reels?|p)\//.test(url);
 }
+function isValidTikTokUrl(url) {
+  return /^(https:\/\/)?(www\.|vm\.)?tiktok\.com\//.test(url);
+}
 
 function getVideoInfoFromPage(tabId) {
   return new Promise((resolve, reject) => {
@@ -418,6 +433,25 @@ function getVideoInfoFromPage(tabId) {
             };
             const caption = getInstagramCaption();
             return { title: caption.substring(0, 100), url, platform: 'instagram', caption };
+          }
+
+          if (hostname.includes('tiktok.com')) {
+            const getTikTokCaption = () => {
+              try {
+                const descEl = document.querySelector('[data-e2e="browse-video-desc"], [data-e2e="video-desc"], h1[data-e2e="browse-video-desc"]');
+                if (descEl && descEl.textContent.trim()) return descEl.textContent.trim();
+              } catch { }
+              try {
+                const metaDesc = document.querySelector('meta[property="og:title"], meta[name="description"]');
+                if (metaDesc && metaDesc.getAttribute('content')) return metaDesc.getAttribute('content').trim();
+              } catch { }
+              try {
+                if (document.title) return document.title.replace(/\| TikTok$/i, '').replace(/- TikTok$/i, '').trim();
+              } catch { }
+              return 'TikTok Video';
+            };
+            const caption = getTikTokCaption();
+            return { title: caption.substring(0, 100), url, platform: 'tiktok', caption };
           }
 
           return { title: null, url, platform: null };
@@ -472,6 +506,18 @@ async function loadVideoInfo() {
     privacySelect.style.display = 'none';
     document.getElementById('privacyGroup').style.display = 'none';
     updateStatus('Ready to upload Instagram Reel to YouTube.', 'success');
+  } else if (currentPlatform === 'tiktok') {
+    platformBadge.textContent  = 'TikTok';
+    platformBadge.className    = 'platform-badge tiktok';
+    videoPreview.textContent   = `🎵 TikTok: ${response.title}`;
+    titleInput.value           = response.caption?.substring(0, 100) || 'TikTok Video';
+    descriptionInput.value     = response.caption || '';
+    uploadButton.textContent   = 'Upload to YouTube';
+    uploadButton.disabled      = false;
+    scheduleToggle.disabled    = false;
+    privacySelect.style.display = 'none';
+    document.getElementById('privacyGroup').style.display = 'none';
+    updateStatus('Ready to upload TikTok video to YouTube.', 'success');
   } else {
     platformBadge.textContent = 'Unknown';
     platformBadge.className   = 'platform-badge';
@@ -484,7 +530,7 @@ async function loadVideoInfo() {
     scheduleToggle.disabled   = true;
     scheduleToggle.checked    = false;
     scheduleTimeContainer.style.display = 'none';
-    updateStatus('This extension works on YouTube or Instagram Reel pages.', 'error');
+    updateStatus('This extension works on YouTube, Instagram Reel, or TikTok pages.', 'error');
   }
 }
 
@@ -567,14 +613,15 @@ function handleStreamEvent(event) {
 // ─── Upload button ────────────────────────────────────────────────────────────
 uploadButton.addEventListener('click', async () => {
   // Explicit platform guard
-  if (currentPlatform !== 'youtube' && currentPlatform !== 'instagram') {
-    updateStatus('Invalid platform. Please navigate to a supported YouTube or Instagram page.', 'error');
+  if (currentPlatform !== 'youtube' && currentPlatform !== 'instagram' && currentPlatform !== 'tiktok') {
+    updateStatus('Invalid platform. Please navigate to a supported YouTube, Instagram, or TikTok page.', 'error');
     return;
   }
 
   if (!currentVideoUrl) { updateStatus('No video detected.', 'error'); return; }
   if (currentPlatform === 'youtube'   && !isValidYouTubeUrl(currentVideoUrl))     { updateStatus('Invalid YouTube URL.', 'error'); return; }
   if (currentPlatform === 'instagram' && !isValidInstagramReelUrl(currentVideoUrl)) { updateStatus('Invalid Instagram URL.', 'error'); return; }
+  if (currentPlatform === 'tiktok'    && !isValidTikTokUrl(currentVideoUrl))    { updateStatus('Invalid TikTok URL.', 'error'); return; }
 
   if (!isConnected) {
     updateStatus('⚠️ Please connect your YouTube account first.', 'error');
@@ -593,12 +640,24 @@ uploadButton.addEventListener('click', async () => {
       return;
     }
 
+    // Build transformOptions if enabled
+    let transformOptions = null;
+    if (transformToggle && transformToggle.checked) {
+      transformOptions = {
+        preset: transformPreset ? transformPreset.value : 'quick_anti_detect'
+      };
+      if (topBannerText && topBannerText.value.trim()) {
+        transformOptions.topBannerText = topBannerText.value.trim();
+      }
+    }
+
     uploadButton.disabled    = true;
     uploadButton.textContent = '⏳ Scheduling…';
     updateStatus('Scheduling video...', 'info');
 
     try {
       await syncYouTubeCookiesIfNeeded();
+      await syncTikTokCookiesIfNeeded();
       const res = await fetch(`${BACKEND_URL}/api/schedule`, {
         method: 'POST',
         headers: {
@@ -614,6 +673,7 @@ uploadButton.addEventListener('click', async () => {
           scheduledAt: scheduledDate.toISOString(),
           postToYouTube: youtubeToggle.checked,
           crossPostToInstagram: crossPostToggle.checked,
+          transformOptions: transformOptions
         }),
       });
       if (!res.ok) { const d = await res.json(); throw new Error(d.error || res.statusText); }
@@ -633,6 +693,17 @@ uploadButton.addEventListener('click', async () => {
   }
 
   // ── Immediate upload path ──────────────────────────────────────────────────
+  // Build transformOptions if enabled
+  let transformOptions = null;
+  if (transformToggle && transformToggle.checked) {
+    transformOptions = {
+      preset: transformPreset ? transformPreset.value : 'quick_anti_detect'
+    };
+    if (topBannerText && topBannerText.value.trim()) {
+      transformOptions.topBannerText = topBannerText.value.trim();
+    }
+  }
+
   resetUi();
   uploadButton.disabled = true;
   uploadButton.classList.add('processing');
@@ -647,7 +718,8 @@ uploadButton.addEventListener('click', async () => {
   };
 
   try {
-    if (currentPlatform === 'instagram') {
+    if (currentPlatform === 'instagram' || currentPlatform === 'tiktok') {
+      await syncTikTokCookiesIfNeeded();
       const res = await fetch(`${BACKEND_URL}/api/process-batch`, {
         method: 'POST',
         headers: {
@@ -662,6 +734,7 @@ uploadButton.addEventListener('click', async () => {
           userAgent:         navigator.userAgent,
           postToYouTube:     youtubeToggle.checked,
           crossPostToInstagram: crossPostToggle.checked,
+          transformOptions:  transformOptions
         }),
       });
       if (!res.ok || !res.body) throw new Error(`Backend error: ${res.statusText || res.status}`);
@@ -682,6 +755,7 @@ uploadButton.addEventListener('click', async () => {
           userAgent:   navigator.userAgent,
           postToYouTube: youtubeToggle.checked,
           crossPostToInstagram: crossPostToggle.checked,
+          transformOptions: transformOptions
         }),
       });
       if (!res.ok || !res.body) throw new Error(`Backend error: ${res.statusText || res.status}`);
@@ -800,6 +874,55 @@ async function syncYouTubeCookiesIfNeeded() {
   } catch (error) {
     updateStatus('❌ ' + (error.message || 'Cookie sync failed.'), 'error');
     throw error;
+  }
+}
+
+function getBrowserTikTokCookies() {
+  return new Promise((resolve, reject) => {
+    if (!chrome.cookies || !chrome.cookies.getAll) {
+      return resolve([]);
+    }
+    chrome.cookies.getAll({}, (cookies) => {
+      if (chrome.runtime.lastError) {
+        return resolve([]);
+      }
+      const filtered = (cookies || []).filter(c => c.domain.includes('tiktok.com'));
+      resolve(filtered);
+    });
+  });
+}
+
+async function uploadTikTokCookiesToBackend() {
+  const cookies = await getBrowserTikTokCookies();
+  if (!cookies.length) {
+    return false;
+  }
+
+  const fileContent = formatCookiesAsNetscape(cookies);
+  const formData = new FormData();
+  formData.append('cookies', new Blob([fileContent], { type: 'text/plain' }), 'tiktok_cookies.txt');
+
+  const res = await fetch(`${BACKEND_URL}/api/tiktok/cookies`, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${sessionToken}` },
+    body: formData,
+  });
+
+  return res.ok;
+}
+
+async function syncTikTokCookiesIfNeeded() {
+  if (currentPlatform !== 'tiktok') {
+    return true;
+  }
+
+  updateStatus('🔐 Syncing TikTok browser cookies…', 'info');
+  try {
+    await uploadTikTokCookiesToBackend();
+    return true;
+  } catch (error) {
+    console.warn('TikTok cookie sync warning:', error);
+    return true;
   }
 }
 

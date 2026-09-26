@@ -1,97 +1,130 @@
-# YouTube Shorts Uploader
+# 🚀 YouTube Shorts Uploader & Reel Transformer Engine
 
-A greenfield Chrome extension project paired with a Node.js/Express backend. The extension sends a YouTube video URL to the backend, which downloads the video, uploads it to Cloudinary, uploads it to YouTube as a Short, and then cleans up temporary assets.
+A full-stack automation platform featuring a **Chrome Extension**, a **Node.js/Express Backend Engine**, and **GitHub Actions CI/CD Integration**. Automatically download reels from YouTube, Instagram, and TikTok, transform them with FFmpeg filters (to bypass duplicate/copyright detection and re-style content), cross-post to Instagram Reels & YouTube Shorts, and schedule uploads automatically.
 
-## Prerequisites
+---
 
-- Node.js 18+ installed
-- Docker installed for Render deployment
-- Google Cloud Console account with YouTube Data API v3 enabled
-- Cloudinary account
-- `yt-dlp` installed locally for development: `pip install yt-dlp`
-- `ffmpeg` installed locally
+## ✨ Features
 
-## YouTube OAuth Setup
+- 🎬 **Multi-Platform Scraping & Uploading:** Scrape and upload YouTube Shorts, Instagram Reels, and TikTok videos seamlessly.
+- 🎨 **Reel Transformation Engine (FFmpeg):**
+  - 🪞 **Horizontal Mirroring (`hflip`):** Inverts video left-to-right to alter visual hashes.
+  - ⚡ **Speed & Frame Rate Shift (1.03x – 1.08x):** Alters playback timing & duration while keeping natural pitch.
+  - 🔍 **Micro Zoom & Edge Crop (1% – 10%):** Crops out original borders and scales back to standard 9:16 (1080x1920).
+  - 🌈 **Color Matrix Filters:** `cinematic`, `warm`, `cool`, or `contrast` adjustments.
+  - 🏷️ **Top Banner Hook Header:** Adds customizable, high-converting banner text over video top (*"WAIT FOR THE END 😱"*).
+  - 💧 **Custom Watermarks:** Adds subtle handle/watermark text over output reels.
+- ⚡ **Transformation Presets:**
+  - `⚡ Quick Anti-Detect`: Horizontal flip + 1.04x speed + 3% crop + cinematic color filter.
+  - `🔥 Viral Hook Header`: Flip + 1.03x speed + contrast filter + custom top banner text.
+  - `🎨 Branded`: Speed shift + warm color filter + brand handle watermark.
+- 📅 **Automated Scheduler:** Queue videos for automated future publication.
+- ⚙️ **GitHub Actions CI/CD:**
+  - Automated build & packaging of `chrome-extension-youtube-uploader.zip` artifact.
+  - Automated cloud video processing runner with pre-configured FFmpeg.
 
-1. Open Google Cloud Console and create or select a project.
-2. Enable the YouTube Data API v3.
-3. Create OAuth 2.0 credentials for a Web application.
-4. Add the redirect URI: `https://your-backend.onrender.com/api/auth/callback`.
-5. Copy the Client ID and Client Secret into `.env`.
+---
 
-## Cloudinary Setup
+## 🛠️ How to Use Reel Transformation
 
-1. Create a Cloudinary account.
-2. Copy your Cloud name, API key, and API secret.
-3. Add them to `.env`.
+### 1. In the Chrome Extension Popup
+1. Open any YouTube Short, Instagram Reel, or TikTok video.
+2. Click the **ShortsFlow** extension icon.
+3. Check **"✨ Enable Reel Transformation (Anti-Duplicate)"**.
+4. Select a **Preset Filter** (`Quick Anti-Detect`, `Viral Hook Header`, or `Branded`).
+5. (Optional) Enter custom **Top Hook Banner Text** (e.g. *"This changed everything 🤯"*).
+6. Click **Upload** or **Schedule for later**.
 
-## Local Development
+### 2. Via Backend API (`POST /api/process`)
+Pass `transformOptions` in the JSON request body:
 
-1. Navigate to the backend folder:
+```json
+{
+  "videoUrl": "https://www.instagram.com/reel/Cxxxxxx/",
+  "title": "My Restyled Short",
+  "description": "#Shorts #Viral",
+  "postToYouTube": true,
+  "crossPostToInstagram": true,
+  "transformOptions": {
+    "preset": "quick_anti_detect",
+    "topBannerText": "WAIT FOR THE END 😱",
+    "topBannerBgColor": "black@0.8",
+    "topBannerTextColor": "yellow"
+  }
+}
+```
+
+---
+
+## ⚙️ GitHub Actions & CI/CD Deployment
+
+Whenever you push to `main` (or run a `workflow_dispatch` manual trigger):
+
+1. **Automated Testing:** Sets up Node.js 20 and native `FFmpeg` on Ubuntu runner to test video transformation modules.
+2. **Artifact Packaging:** Zips the `extension/` directory into `chrome-extension-youtube-uploader.zip` and uploads it to your repository's **Actions** tab.
+3. **Scheduled Automations:** Runs scheduled cron jobs (every 6 hours) to execute serverless reel processing workflows.
+
+### Downloading the Extension Build from GitHub Actions:
+1. Go to your repository on GitHub: `https://github.com/Ramanand-tomar/youtube-chrome-extension-automation`
+2. Click on the **Actions** tab.
+3. Select the latest workflow run (**Reel Automation & CI/CD Pipeline**).
+4. Scroll down to **Artifacts** and download `chrome-extension-build.zip`!
+
+---
+
+## 💻 Local Development Setup
+
+1. **Clone & Install Dependencies:**
    ```bash
    cd backend
    npm install
    ```
-2. Copy `.env.example` to `.env` and set your values.
-3. Install `yt-dlp` and `ffmpeg` locally if not already installed.
-4. Start the backend:
+2. **Ensure FFmpeg is installed:**
+   - Windows: Download FFmpeg and ensure `ffmpeg` is on system PATH.
+   - Linux / macOS: `sudo apt install ffmpeg` or `brew install ffmpeg`.
+3. **Configure Environment Variables (`backend/.env`):**
+   ```env
+   PORT=3000
+   YOUTUBE_CLIENT_ID=your_client_id
+   YOUTUBE_CLIENT_SECRET=your_client_secret
+   YOUTUBE_REDIRECT_URI=http://localhost:3000/api/auth/callback
+   CLOUDINARY_CLOUD_NAME=your_cloud_name
+   CLOUDINARY_API_KEY=your_api_key
+   CLOUDINARY_API_SECRET=your_api_secret
+   ```
+4. **Start the Backend Server:**
    ```bash
    npm start
    ```
-5. Open `http://localhost:3000/api/auth/youtube` in your browser.
-6. Authorize the application and complete the OAuth flow.
+5. **Load Chrome Extension:**
+   - Open Chrome and navigate to `chrome://extensions`.
+   - Enable **Developer Mode**.
+   - Click **Load Unpacked** and select the `extension/` directory.
 
-## Loading the Extension
+---
 
-1. Open Chrome and go to `chrome://extensions`.
-2. Enable Developer mode.
-3. Click **Load unpacked**.
-4. Select the `extension/` folder.
-5. Update the `BACKEND_URL` constant in `extension/popup.js` to `http://localhost:3000` for local testing.
-6. Reload the extension.
-
-## Deploying to Render
-
-1. Push the repository to GitHub.
-2. Create a new Render Web Service.
-3. Choose Docker runtime and point to `backend/Dockerfile`.
-4. Set environment variables in Render manually.
-5. Update `BACKEND_URL` in `extension/popup.js` to your Render service URL.
-6. Reload the extension after deployment.
-
-## Quota Notes
-
-- YouTube API free quota is typically 10,000 units per day.
-- Each video upload consumes approximately 1,600 units.
-- Expect roughly 6 uploads per day on the free quota.
-
-## Troubleshooting
-
-- `yt-dlp` not found: ensure it is installed and available in PATH.
-- `ffmpeg` missing: install `ffmpeg` locally or in the Docker image.
-- Token issues: re-run the OAuth flow at `/api/auth/youtube`.
-- CORS errors: confirm the frontend is using the correct backend URL.
-
-## Project Structure
+## 📁 Repository Structure
 
 ```
-youtube-shorts-uploader/
+youtube-chrome-extension-automation/
+├── .github/
+│   └── workflows/
+│       └── deploy-and-transform.yml   ← GitHub Actions CI/CD & Pipeline
 ├── backend/
-│   ├── server.js
+│   ├── server.js                     ← Express API server
+│   ├── utils/
+│   │   ├── videoTransformer.js       ← FFmpeg Transformation Engine
+│   │   ├── instagram.js              ← Instagram scraper helper
+│   │   ├── tiktok.js                 ← TikTok scraper helper
+│   │   ├── scheduler.js              ← Job scheduling logic
+│   │   └── quota.js                  ← Upload quota manager
 │   ├── package.json
-│   ├── .env.example
-│   ├── Dockerfile
-│   ├── render.yaml
-│   └── downloads/          ← created at runtime via fs-extra.ensureDir
+│   └── downloads/                    ← Temporary video download folder
 ├── extension/
 │   ├── manifest.json
-│   ├── popup.html
-│   ├── popup.js
+│   ├── popup.html                    ← Extension UI with Reel Transformer controls
+│   ├── popup.js                      ← Frontend API client
 │   ├── background.js
-│   ├── content.js
-│   └── icons/
-│       ├── icon16.png
-│       ├── icon48.png
-│       └── icon128.png
+│   └── content.js
 └── README.md
 ```

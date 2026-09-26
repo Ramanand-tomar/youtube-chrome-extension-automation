@@ -1,13 +1,13 @@
 const { pool } = require('../db');
 
-const MAX_DAILY_UPLOADS = parseInt(process.env.MAX_DAILY_UPLOADS || '10', 10);
+const MAX_DAILY_UPLOADS = parseInt(process.env.MAX_DAILY_UPLOADS || '20', 20);
 
 /**
  * Get today's date as YYYY-MM-DD string
  */
 function getTodayDate() {
   const now = new Date();
-  return now.toISOString().split('T')[0];
+  return now.toISOString().split('T')[0]; 
 }
 
 /**

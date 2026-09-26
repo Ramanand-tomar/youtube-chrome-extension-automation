@@ -158,6 +158,45 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         platform: 'instagram',
         caption: caption,
       });
+    }
+    // TikTok video detection
+    else if (window.location.hostname.includes('tiktok.com')) {
+      const getTikTokCaption = () => {
+        // 1. Try video description element (data-e2e="browse-video-desc" or "video-desc")
+        try {
+          const descEl = document.querySelector('[data-e2e="browse-video-desc"], [data-e2e="video-desc"], h1[data-e2e="browse-video-desc"]');
+          if (descEl && descEl.textContent.trim()) {
+            return descEl.textContent.trim();
+          }
+        } catch (e) {}
+
+        // 2. Check meta tag og:title or description
+        try {
+          const metaDesc = document.querySelector('meta[property="og:title"], meta[name="description"]');
+          if (metaDesc && metaDesc.getAttribute('content')) {
+            const content = metaDesc.getAttribute('content').trim();
+            if (content) return content;
+          }
+        } catch (e) {}
+
+        // 3. Fallback to document.title
+        try {
+          if (document.title) {
+            return document.title.replace(/\| TikTok$/i, '').replace(/- TikTok$/i, '').trim();
+          }
+        } catch (e) {}
+
+        return 'TikTok Video';
+      };
+
+      const caption = getTikTokCaption();
+
+      sendResponse({
+        title: caption.substring(0, 100),
+        url: window.location.href,
+        platform: 'tiktok',
+        caption: caption,
+      });
     } else {
       sendResponse({
         title: null,

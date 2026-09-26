@@ -1,10 +1,10 @@
 {
   "manifest_version": 3,
-  "name": "YouTube Shorts & Instagram Reels Uploader",
-  "version": "2.0.0",
-  "description": "Upload YouTube Shorts and Instagram Reels through a backend processing pipeline.",
+  "name": "YouTube Shorts, Instagram Reels & TikTok Uploader",
+  "version": "2.1.0",
+  "description": "Upload YouTube Shorts, Instagram Reels, and TikTok videos through a backend processing pipeline.",
   "permissions": ["activeTab", "scripting", "tabs", "storage", "cookies"],
-  "host_permissions": ["https://www.youtube.com/*", "https://youtube.com/*", "https://www.instagram.com/*", "https://instagram.com/*", "https://youtube-chrome-extension-automation.onrender.com/*", "http://localhost/*"],
+  "host_permissions": ["https://www.youtube.com/*", "https://youtube.com/*", "https://www.instagram.com/*", "https://instagram.com/*", "https://www.tiktok.com/*", "https://tiktok.com/*", "https://vmtiktok.com/*", "https://youtube-chrome-extension-automation.onrender.com/*", "http://localhost/*"],
   "action": {
     "default_popup": "popup.html",
     "default_icon": {
@@ -21,7 +21,9 @@
       "matches": [
         "https://www.youtube.com/*",
         "https://www.instagram.com/*",
-        "https://instagram.com/*"
+        "https://instagram.com/*",
+        "https://www.tiktok.com/*",
+        "https://tiktok.com/*"
       ],
       "js": ["content.js"],
       "run_at": "document_idle"

@@ -12,3 +12,6 @@ backend/cookies/
 backend/quota/
 cookies/
 quota/
+backend/yt-dlp.exe
+*.exe
+dist/

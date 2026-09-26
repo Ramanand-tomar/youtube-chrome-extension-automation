@@ -105,6 +105,11 @@
         background: rgba(244, 63, 94, 0.1);
         border-color: rgba(244, 63, 94, 0.2);
       }
+      .platform-badge.tiktok {
+        color: #00f2fe;
+        background: rgba(0, 242, 254, 0.1);
+        border-color: rgba(0, 242, 254, 0.2);
+      }
 
       /* Tabs styling */
       .tabs {
@@ -402,6 +407,10 @@
       .job-platform.instagram {
         background: rgba(244, 63, 94, 0.1);
         color: #f43f5e;
+      }
+      .job-platform.tiktok {
+        background: rgba(0, 242, 254, 0.1);
+        color: #00f2fe;
       }
 
       .job-status-badge {
@@ -782,6 +791,27 @@
         <div class="toggle-container" id="crossPostToggleContainer">
           <input type="checkbox" id="crossPostToggle" checked />
           <span class="toggle-label" for="crossPostToggle">Cross-post to Instagram Reels</span>
+        </div>
+
+        <!-- Reel Transformation Toggle & Options -->
+        <div class="toggle-container" id="transformToggleContainer" style="margin-top: 10px; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 10px;">
+          <input type="checkbox" id="transformToggle" />
+          <span class="toggle-label" for="transformToggle">✨ Enable Reel Transformation (Anti-Duplicate)</span>
+        </div>
+
+        <div id="transformOptionsContainer" style="display: none; background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 10px; padding: 10px; margin-bottom: 12px;">
+          <div class="form-group" style="margin-bottom: 8px;">
+            <label for="transformPreset" style="font-size: 0.78rem; color: #38bdf8;">Preset Filter</label>
+            <select id="transformPreset" style="font-size: 0.8rem; padding: 6px;">
+              <option value="quick_anti_detect" selected>⚡ Quick Anti-Detect (Flip, Speed, Crop, Color)</option>
+              <option value="viral_hook">🔥 Viral Hook Header (Top Text + Mirror)</option>
+              <option value="branded">🎨 Branded Watermark Frame</option>
+            </select>
+          </div>
+          <div class="form-group" id="topBannerGroup" style="margin-bottom: 0;">
+            <label for="topBannerText" style="font-size: 0.75rem;">Top Hook Banner Text</label>
+            <input id="topBannerText" placeholder="e.g. WAIT FOR THE END 😱" style="font-size: 0.8rem; padding: 6px;" />
+          </div>
         </div>
 
         <!-- Date time picker container -->
